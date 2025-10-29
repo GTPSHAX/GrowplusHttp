@@ -1,0 +1,7 @@
+# ignore output documentations
+html/
+latex/
+
+# ignore build dir
+out/
+build/
