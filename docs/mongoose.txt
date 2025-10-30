@@ -1,0 +1,2324 @@
+API Reference#
+Core#
+struct mg_addr#
+struct mg_addr {
+  uint8_t ip[16];    // Holds IPv4 or IPv6 address, in network byte order
+  uint16_t port;     // TCP or UDP port in network byte order
+  uint8_t scope_id;  // IPv6 scope ID
+  bool is_ip6;       // True when address is IPv6 address
+};
+This structure contains network address; it can be considered as a Mongoose equivalent for sockets sockaddr structure.
+
+struct mg_mgr#
+struct mg_mgr {
+  struct mg_connection *conns;  // List of active connections
+  struct mg_dns dns4;           // DNS for IPv4
+  struct mg_dns dns6;           // DNS for IPv6
+  int dnstimeout;               // DNS resolve timeout in milliseconds
+  unsigned long nextid;         // Next connection ID
+  void *userdata;               // Arbitrary user data pointer
+  ...
+  struct mg_tcpip_if *ifp;      // Builtin TCP/IP stack only. Interface pointer
+};
+Event management structure that holds a list of active connections, together with some housekeeping information.
+
+struct mg_connection#
+struct mg_connection {
+  struct mg_connection *next;  // Linkage in struct mg_mgr :: connections
+  struct mg_mgr *mgr;          // Our container
+  struct mg_addr loc;          // Local address
+  struct mg_addr rem;          // Remote address
+  void *fd;                    // Connected socket, or LWIP data
+  unsigned long id;            // Auto-incrementing unique connection ID
+  struct mg_iobuf recv;        // Incoming data
+  struct mg_iobuf send;        // Outgoing data
+  mg_event_handler_t fn;       // User-specified event handler function
+  void *fn_data;               // User-specified function parameter
+  mg_event_handler_t pfn;      // Protocol-specific handler function
+  void *pfn_data;              // Protocol-specific function parameter
+  char data[MG_DATA_SIZE];     // Arbitrary connection data, MG_DATA_SIZE defaults to 32 bytes
+  void *tls;                   // TLS specific data
+  unsigned is_listening : 1;   // Listening connection
+  unsigned is_client : 1;      // Outbound (client) connection
+  unsigned is_accepted : 1;    // Accepted (server) connection
+  unsigned is_resolving : 1;   // Non-blocking DNS resolve is in progress
+  unsigned is_connecting : 1;  // Non-blocking connect is in progress
+  unsigned is_tls : 1;         // TLS-enabled connection
+  unsigned is_tls_hs : 1;      // TLS handshake is in progress
+  unsigned is_udp : 1;         // UDP connection
+  unsigned is_websocket : 1;   // WebSocket connection
+  unsigned is_hexdumping : 1;  // Hexdump in/out traffic
+  unsigned is_draining : 1;    // Send remaining data, then close and free
+  unsigned is_closing : 1;     // Close and free the connection immediately
+  unsigned is_full : 1;        // Stop reads, until cleared
+  unsigned is_resp : 1;        // Response is still being generated
+  unsigned is_readable : 1;    // Connection is ready to read
+  unsigned is_writable : 1;    // Connection is ready to write
+};
+A connection - either a listening connection, or an accepted connection, or an outbound connection.
+
+mg_mgr_init()#
+void mg_mgr_init(struct mg_mgr *mgr);
+Initialize event manager structure:
+
+Set a list of active connections to NULL
+Set default DNS servers for IPv4 and IPv6
+Set default DNS lookup timeout
+Parameters:
+
+mgr - a pointer to mg_mgr structure that needs to be initialized
+Return value: none
+
+Usage example:
+
+struct mg_mgr mgr;
+mg_mgr_init(&mgr);
+mg_mgr_poll()#
+void mg_mgr_poll(struct mg_mgr *mgr, int ms);
+Perform a single poll iteration. For each connection in the mgr->conns list:
+
+See if there is incoming data. If there is, read it into the c->recv buffer, send MG_EV_READ event
+See if there is data in the c->send buffer, and write it, send MG_EV_WRITE event
+If a connection is listening, accept an incoming connection if any, and send MG_EV_ACCEPT event to it
+Send MG_EV_POLL event
+Parameters:
+
+mgr - an event manager to use
+ms - a timeout in milliseconds
+Return value: none
+
+Usage example:
+
+while (running == true) mg_mgr_poll(&mgr, 1000 /* 1 sec */);
+mg_mgr_free()#
+void mg_mgr_free(struct mg_mgr *mgr);
+Close all connections, and free all resources.
+
+Parameters:
+
+mgr - an event manager to cleanup
+Return value: none
+
+Usage example:
+
+struct mg_mgr mgr;
+mg_mgr_init(&mgr);
+while (running == true) mg_mgr_poll(&mgr, 1000);   // Event loop
+mg_mgr_free(&mgr);
+mg_listen()#
+struct mg_connection *mg_listen(struct mg_mgr *mgr, const char *url,
+                                mg_event_handler_t fn, void *fn_data);
+Create a listening connection, append this connection to mgr->conns.
+
+Parameters:
+
+mgr - an event manager to use
+url - a URL. Specifies local IP address and port to listen on, e.g. tcp://127.0.0.1:1234 or udp://0.0.0.0:9000. If this URL is a known TLS URL, the is_tls flag will be set
+fn - an event handler function
+fn_data - an arbitrary pointer, which will be stored in the connection structure as c->fn_data, so the event handler can use it when called.
+Return value: created connection, or NULL on error.
+
+Usage example:
+
+struct mg_connection *c = mg_listen(&mgr, "tcp://127.0.0.1:8080", fn, NULL);
+mg_connect()#
+struct mg_connection *mg_connect(struct mg_mgr *mgr, const char *url,
+                                 mg_event_handler_t fn, void *fn_data);
+Create an outbound connection, append this connection to mgr->conns.
+
+Parameters:
+
+mgr - An event manager to use
+url - A URL, specifies remote IP address/port to connect to, e.g. http://a.com. If this URL is a known TLS URL, the is_tls flag will be set
+fn - An event handler function
+fn_data - an arbitrary pointer, which will be stored in the connection structure as c->fn_data, so the event handler can use it when called.
+Return value: created connection, or NULL on error.
+
+Note: This function does not connect to peer, it allocates required resources and starts connect process. Once peer is really connected, MG_EV_CONNECT event is sent to connection event handler.
+
+Usage example:
+
+struct mg_connection *c = mg_connect(&mgr, "http://example.org", fn, NULL);
+mg_send()#
+bool mg_send(struct mg_connection *c, const void *data, size_t size);
+Append data of size size to the c->send buffer. Return success / failure.
+
+Note: Except when using UDP on the Mongoose TCP/IP stack, this function does not push data to the network. It only appends data to the output buffer. Data is sent when mg_mgr_poll() is called. If mg_send() is called multiple times, the output buffer grows. When calling this function to send UDP on the Mongoose TCP/IP stack, an Ethernet frame gets sent immediately, the c->send buffer is bypassed.
+
+Parameters:
+
+c - A connection pointer
+data - A pointer to data to append to the send buffer
+size - A data size
+Return value: true if data appended successfully and false otherwise
+
+Usage example:
+
+mg_send(c, "hi", 2);  // Append string "hi" to the output buffer
+mg_wakeup()#
+void mg_wakeup(struct mg_mgr *mgr, unsigned long id, const void *data, size_t size);
+Any thread/task can send data, size to Mongoose manager executing in another thread. This is the only Mongoose function that can be called from a different task/thread. Calling this function wakes up the event manager and generates an MG_EV_WAKEUP event in the respective event handler. Call mg_wakeup_init() in the event manager thread before first using it.
+
+The data could be anything. It could be a structure. Or it could be a pointer. The receiving connection gets MG_EV_WAKEUP, and gets that data as a chunk of memory: struct mg_str *data = ev_data. Note that the sent data should be small, ideally less than 512 bytes. If you need to send a large piece of data, allocate it and send a pointer instead - see examples below.
+
+Parameters:
+
+mgr - An event manager
+id - A destination connection ID
+data - A pointer to data to append to the send buffer
+size - A data size
+Usage example:
+
+Sending small data
+
+// Sender side:
+struct foo foo = {0};                   // Small structure, size < 512 bytes
+mg_wakeup(mgr, id, &foo, sizeof(foo));  // Send a structure
+
+// Receiver side:
+if (ev == MG_EV_WAKEUP) {
+  struct mg_str *data = (struct mg_str *) ev_data;
+  struct foo *foo = (struct foo *) data->buf;
+}
+Sending large data. Sender allocates it, receiver deallocates
+
+// Sender side:
+struct foo *foo = malloc(sizeof(*foo));  // Big structure, allocate it
+mg_wakeup(mgr, id, &foo, sizeof(foo));   // Send a pointer to structure
+
+// Receiver side:
+if (ev == MG_EV_WAKEUP) {
+  struct mg_str *data = (struct mg_str *) ev_data;
+  struct foo *foo = * (struct foo **) data->buf;
+  // Do something with foo ...
+  free(foo);   // Deallocate foo
+}
+mg_wakeup_init()#
+void mg_wakeup_init(struct mg_mgr *mgr);
+Initialize the wakeup scheme used by mg_wakeup()
+
+Parameters:
+
+mgr - An event manager
+Usage example:
+
+mg_wakeup_init(&mgr);  // Initialise wakeup socket pai
+mg_printf(), mg_vprintf()#
+int mg_printf(struct mg_connection *, const char *fmt, ...);
+int mg_vprintf(struct mg_connection *, const char *fmt, va_list *ap);
+Same as mg_send(), but formats data using printf() semantics. Return number of bytes appended to the output buffer.
+
+NOTE: See mg_snprintf for the list of supported format specifiers
+
+Parameters:
+
+c - a connection pointer
+fmt - a format string in printf semantics
+Return value: number of bytes appended to the output buffer.
+
+Usage example:
+
+mg_printf(c, "Hello, %s!", "world"); // Add "Hello, world!" to output buffer
+mg_wrapfd()#
+struct mg_connection *mg_wrapfd(struct mg_mgr *mgr, int fd,
+                                mg_event_handler_t fn, void *fn_data);
+Wrap a given file descriptor fd into a connection, and add that connection to the event manager. An fd descriptor must support send(), recv(), select() syscalls, and be non-blocking. Mongoose will treat it as a TCP socket. The c->rem and c->loc addresses will be empty.
+
+Parameters:
+
+fd - A file descriptor to wrap
+mgr - An event manager
+fn - A pointer to event handler function
+fn_data - an arbitrary pointer, which will be stored in the connection structure as c->fn_data, so the event handler can use it when called.
+Return value: Pointer to the created connection or NULL in case of error
+
+HTTP#
+struct mg_http_header#
+struct mg_http_header {
+  struct mg_str name;   // Header name
+  struct mg_str value;  // Header value
+};
+Structure represents HTTP header, like Content-Type: text/html. Content-Type is a header name and text/html is a header value.
+
+struct mg_http_message#
+struct mg_http_message {
+  struct mg_str method, uri, query, proto;             // Request/response line
+  struct mg_http_header headers[MG_MAX_HTTP_HEADERS];  // Headers
+  struct mg_str body;                                  // Body
+  struct mg_str message;                               // Request line + headers + body
+};
+Structure represents the HTTP message.
+
+HTTP message
+mg_http_listen()#
+struct mg_connection *mg_http_listen(struct mg_mgr *mgr, const char *url,
+                                     mg_event_handler_t fn, void *fn_data);
+Create HTTP listener.
+
+Parameters:
+
+mgr - An event manager
+url - A URL, specifies local IP address and port to listen on, e.g. http://0.0.0.0:8000. If this URL is 'https', the is_tls flag will be set
+fn - An event handler function
+fn_data - an arbitrary pointer, which will be stored in the connection structure as c->fn_data, so the event handler can use it when called.
+Return value: Pointer to created connection or NULL in case of error
+
+Usage example:
+
+struct mg_connection *c = mg_http_listen(&mgr, "0.0.0.0:8000", fn, arg);
+if (c == NULL) fatal_error("Cannot create listener");
+mg_http_connect()#
+struct mg_connection *mg_http_connect(struct mg_mgr *, const char *url,
+                                      mg_event_handler_t fn, void *fn_data);
+Create HTTP client connection.
+
+Note: This function does not connect to peer; it allocates required resources and starts connect process. Once peer is really connected MG_EV_CONNECT event is sent to connection event handler.
+
+Parameters:
+
+mgr - An event manager
+url - A URL, specifies remote URL, e.g. http://google.com. If this URL is 'https', the is_tls flag will be set
+fn - An event handler function
+fn_data - an arbitrary pointer, which will be stored in the connection structure as c->fn_data, so the event handler can use it when called.
+Return value: Pointer to created connection or NULL in case of error
+
+Usage example:
+
+struct mg_connection *c = mg_http_connect(&mgr, "http://google.com", fn, NULL);
+if (c == NULL) fatal_error("Cannot create connection");
+mg_http_status()#
+int mg_http_status(const struct mg_http_message *hm);
+Get status code of the HTTP response. Parameters:
+
+hm - Parsed HTTP response
+Return value: status code, e.g. 200 for success.
+
+mg_http_get_request_len()#
+int mg_http_get_request_len(const unsigned char *buf, size_t buf_len);
+Get length of request.
+
+The length of request is a number of bytes till the end of HTTP headers. It does not include length of HTTP body.
+
+Parameters:
+
+buf - A pointer to a buffer with request
+buf_len - Buffer length
+Return value: -1 on error, 0 if a message is incomplete, or the length of request
+
+Usage example:
+
+const char *buf = "GET /test \n\nGET /foo\n\n";
+int req_len = mg_http_get_request_len(buf, strlen(buf));  // req_len == 12
+Function mg_http_get_request_len()
+mg_http_parse()#
+int mg_http_parse(const char *s, size_t len, struct mg_http_message *hm);
+Parse string request into mg_http_message structure
+
+Parameters:
+
+s - A request string
+len - A request string length
+hm - A pointer to a structure to store parsed request
+Return value: request length (see mg_http_get_request_len())
+
+Usage example:
+
+struct mg_http_message hm;
+const char *buf = "GET / HTTP/1.0\n\n";
+if (mg_http_parse(buf, strlen(buf), &hm) > 0) { /* success */ }
+mg_http_printf_chunk()#
+void mg_http_printf_chunk(struct mg_connection *c, const char *fmt, ...);
+Write a chunk of data in chunked encoding format, using printf() semantic.
+
+Parameters:
+
+c - A connection pointer
+fmt - A string, format specified in printf semantics
+Return value: None
+
+Usage example:
+
+mg_http_printf_chunk(c, "Hello, %s!", "world");
+mg_http_write_chunk()#
+void mg_http_write_chunk(struct mg_connection *c, const char *buf, size_t len);
+Write a chunk of data in chunked encoding format.
+
+Parameters:
+
+c - A connection pointer
+buf - Data to write
+len - Data length
+Return value: None
+
+Usage example:
+
+mg_http_write_chunk(c, "hi", 2);
+struct mg_http_serve_opts#
+struct mg_http_serve_opts {
+  const char *root_dir;       // Web root directory, must be non-NULL
+  const char *ssi_pattern;    // SSI file name pattern, e.g. #.shtml
+  const char *extra_headers;  // Extra HTTP headers to add in responses
+  const char *mime_types;     // Extra mime types, ext1=type1,ext2=type2,..
+  const char *page404;        // Path to the 404 page, or NULL by default
+  struct mg_fs *fs;           // Filesystem implementation. Use NULL for POSIX
+};
+A structure passed to mg_http_serve_dir() and mg_http_serve_file(), which drives the behavior of those two functions.
+
+In addition to overwriting autodetection based on an extension, you can also use * as an extension in mime_types to force a particular MIME type for unknown extensions:
+
+sopts.mime_types = "*=preferred/default,txt=override/text"
+mg_http_serve_dir()#
+void mg_http_serve_dir(struct mg_connection *c, struct mg_http_message *hm,
+                       const struct mg_http_serve_opts *opts);
+Serve static files according to the given options. Files can also be gzip compressed, including the directory index. All compressed files must end in .gz and there must not exist a file with the same name without the extension, otherwise it will take precedence; see mg_http_serve_file()
+
+NOTE: In order to enable SSI, you need to set the -DMG_ENABLE_SSI=1 build flag.
+
+NOTE: Avoid double dots .. in the root_dir. If you need to reference an upper-level directory, use an absolute path.
+
+Parameters:
+
+c - Connection to use
+hm - HTTP message, that should be served
+opts - Serve options. Note that opts.root_dir can optionally accept extra comma-separated uri=path pairs, see example below
+Return value: None
+
+Usage example:
+
+// Mongoose events handler
+void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    struct mg_http_serve_opts opts;
+    memset(&opts, 0, sizeof(opts));
+    opts.root_dir = "/var/www,/conf=/etc";  // Serve /var/www. URIs starting with /conf are served from /etc
+    mg_http_serve_dir(c, hm, &opts);
+  }
+}
+mg_http_serve_file()#
+void mg_http_serve_file(struct mg_connection *c, struct mg_http_message *hm,
+                        const char *path, struct mg_http_serve_opts *opts);
+Serve a static file. If a file with the filename specified in path does not exist, Mongoose tries appending .gz; and if such a file exists, it will serve it with a Content-Encoding: gzip header
+
+NOTE: opts->root_dir settings is ignored by this function.
+
+NOTE: opts->extra_headers, if not NULL, must end with \r\n.
+
+Parameters:
+
+c - Connection to use
+hm - HTTP message to serve
+path - Path to file to serve
+opts - Serve options
+Return value: None
+
+Usage example:
+
+// Mongoose events handler
+void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    struct mg_http_serve_opts opts = {
+      .mime_types = "png=image/png",
+      .extra_headers = "AA: bb\r\nCC: dd\r\n"
+    };
+    mg_http_serve_file(c, hm, "a.png", &opts);
+  }
+}
+mg_http_reply()#
+void mg_http_reply(struct mg_connection *c, int status_code,
+                   const char *headers, const char *body_fmt, ...);
+Send simple HTTP response using printf() semantic. This function formats response body according to a body_fmt, and automatically appends a correct Content-Length header. Extra headers could be passed via headers parameter.
+
+Parameters:
+
+c - Connection to use
+status_code - An HTTP response code
+headers - Extra headers, default NULL. If not NULL, must end with \r\n
+fmt - A format string for the HTTP body, in a printf semantics
+Return value: None
+
+Function mg_http_reply()
+Usage examples:
+
+Send a simple JSON response:
+
+mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{\"result\": %d}", 123);
+Send JSON response:
+
+char *json = mg_mprintf("{%m:%d}", MG_ESC("name"), 123);
+mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s\n", json);
+mg_free(json);
+Send a 302 redirect:
+
+mg_http_reply(c, 302, "Location: /\r\n", "");
+Send error:
+
+mg_http_reply(c, 403, "", "%s", "Not Authorized\n");
+mg_http_get_header()#
+struct mg_str *mg_http_get_header(struct mg_http_message *hm, const char *name);
+Get HTTP header value
+
+Parameters:
+
+hm - HTTP message to look for header
+name - Header name
+Return value: HTTP header value or NULL if not found
+
+Usage example:
+
+// Mongoose event handler
+void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    struct mg_str *s = mg_http_get_header(hm, "X-Extra-Header");
+    if (s != NULL) {
+      mg_http_reply(c, 200, "", "Holly molly! Header value: %.*s", (int) s->len, s->buf);
+    } else {
+      mg_http_reply(c, 200, "", "Oh no, header is not set...");
+    }
+  }
+}
+mg_http_get_header_var()#
+struct mg_str mg_http_get_header_var(struct mg_str s, struct mg_str v);
+Parse HTTP header (e.g. Cookie header) which has form name1=value1; name2=value2; ... and fetch a given variable.
+
+Parameters:
+
+s - HTTP header
+name - variable name name
+Return value: a requested variable, or an empty string.
+
+Usage example:
+
+struct mg_str *cookie = mg_http_get_header(hm, "Cookie");
+struct mg_str token = mg_str("");
+
+if (cookie != NULL) {
+  token = mg_http_get_header_var(*cookie, mg_str("access_token"));
+}
+mg_http_var()#
+struct mg_str mg_http_var(struct mg_str buf, struct mg_str name);
+Fetch an undecoded HTTP variable. Parameters:
+
+buf - a url-encoded string: HTTP request body or query string
+name - a variable name to fetch
+Return value: variable's value. If not found, it is a NULL string.
+
+// We have received a request to /my/uri?a=b&c=d%20
+// The hm->query points to "a=b&c=d%20"
+struct mg_str v = mg_http_var(hm->query, mg_str("c"));  // v = "d%20"
+mg_http_get_var()#
+int mg_http_get_var(const struct mg_str *var, const char *name, char *buf, int len);
+Fetch and decode an HTTP variable
+
+Parameters:
+
+var - HTTP request body
+name - Variable name
+buf - Buffer to write decoded variable
+len - Buffer size
+Return value: Length of decoded variable. A zero or negative value means error
+
+Usage example:
+
+char buf[100] = "";
+mg_http_get_var(&hm->body, "key1", buf, sizeof(buf)) {
+  ...
+}
+mg_http_creds()#
+void mg_http_creds(struct mg_http_message *hm, char *user, size_t userlen,
+                   char *pass, size_t passlen);
+Fetch authentication credential from the request, and store into the user, userlen and pass, passlen buffers. The credentials are looked up in the following order:
+
+from the Authorization HTTP header,
+Basic auth fills both user and pass
+Bearer auth fills only pass
+from the access_token cookie, fills pass
+from the ?access_token=... query string parameter, fills pass
+If none is found, then both user and pass are set to empty nul-terminated strings.
+
+Parameters:
+
+hm - HTTP message to look for credentials
+user - buffer to receive user name
+userlen - size of user buffer
+pass - buffer to receive password
+passlen - size of pass buffer
+Return value: None
+
+Usage example:
+
+// Mongoose events handler
+void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    char user[100], pass[100];
+    mg_http_creds(hm, user, sizeof(user), pass, sizeof(pass)); // "user" is now user name and "pass" is now password from request
+  }
+}
+mg_http_bauth()#
+void mg_http_bauth(struct mg_connection *c, const char *user, const char *pass);
+Write a Basic Authorization header to the output buffer.
+
+Parameters:
+
+c - Connection to use
+user - User name
+pass - Password
+Return value: None
+
+Usage example which uses Basic auth to create Stripe subscription:
+
+  mg_printf(c, "POST /v1/subscriptions HTTP/1.1\r\n"
+               "Host: api.stripe.com\r\n"
+               "Transfer-Encoding: chunked\r\n");
+  mg_http_bauth(c, stripe_private_key, NULL);     // Add Basic auth header
+  mg_printf(c, "%s", "\r\n");                     // End HTTP headers
+
+  mg_http_printf_chunk(c, "&customer=%s", customer_id);   // Set customer
+  mg_http_printf_chunk(c, "&items[0][price]=%s", price);  // And price
+  mg_http_printf_chunk(c, "");                            // End request
+struct mg_http_part#
+// Parameter for mg_http_next_multipart
+struct mg_http_part {
+  struct mg_str name;      // Form field name
+  struct mg_str filename;  // Filename for file uploads
+  struct mg_str body;      // Part contents
+};
+Structure that describes a single part of a HTTP multipart message.
+
+HTTP part
+mg_http_next_multipart()#
+size_t mg_http_next_multipart(struct mg_str body, size_t offset, struct mg_http_part *part);
+Parse the multipart chunk in the body at a given offset. An initial offset should be 0. Fill up parameters in the provided part, which could be NULL. Return offset to the next chunk, or 0 if there are no more chunks.
+
+Parameters:
+
+body- Message body
+offset - Start offset
+part - Pointer to struct mg_http_part to fill
+Return value: offset to the next chunk, or 0 if there are no more chunks.
+
+Usage example (or see form upload tutorial ):
+
+struct mg_http_part part;
+size_t pos = 0;
+
+while ((pos = mg_http_next_multipart(body, pos, &part)) != 0) {
+  MG_INFO(("Chunk name: [%.*s] filename: [%.*s] length: %lu bytes",
+           part.name.len, part.name.buf,
+           part.filename.len, part.filename.buf, part.body.len));
+  // Use this chunk ....
+}
+A diagram below shows how mg_http_next_multipart() in action:
+
+Function mg_http_next_multipart()
+mg_http_upload()#
+
+long mg_http_upload(struct mg_connection *c, struct mg_http_message *hm,
+                    struct mg_fs *fs, const char *dir, size_t max_size);
+This is a helper utility function that is used to upload large files by small chunks.
+
+Append HTTP POST data to a file in a specified directory. A file name and file offset are specified by the query string parameters: POST /upload?file=firmware.bin&offset=2048 HTTP/1.1. If the offset is 0, then the file is truncated. It is the client's responsibility to divide files into smaller chunks and send a sequence of POST requests that will be handled by this function. The full path will be checked for sanity
+
+Parameters:
+
+c- a connection
+hm - a parsed HTTP message
+fs - a filesystem where to write the files, e.g. &mg_fs_posix
+dir - a directory path where to write the files
+max_size - maximum allowed file size
+Return value: file size after write, or negative number on error
+
+Usage example:
+
+static void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    if (mg_match(hm->uri, mg_str("/upload"), NULL)) {
+      mg_http_upload(c, hm, &mg_fs_posix, "/tmp", 99999);
+    } else {
+      struct mg_http_serve_opts opts = {.root_dir = "."};   // Serve
+      mg_http_serve_dir(c, ev_data, &opts);                 // static content
+    }
+  }
+}
+
+Timer#
+mg_timer_add()#
+struct mg_timer *mg_timer_add(struct mg_mgr *mgr,
+                           uint64_t period_ms, unsigned flags,
+                           void (*fn)(void *), void *fn_data);
+Setup a timer. This is a high-level timer API that allows to add a software timer to the event manager. This function mg_calloc()s a new timer and adds it to the mgr->timers list. All added timers are polled when mg_mgr_poll() is called, and called if expired.
+
+NOTE: Make sure that the timer interval is equal or more to the mg_mgr_poll() timeout.
+
+Parameters:
+
+mgr - Pointer to mg_mgr event manager structure
+ms - An interval in milliseconds
+flags - Timer flags bitmask, MG_TIMER_REPEAT and MG_TIMER_RUN_NOW
+fn - Function to invoke
+fn_data - Function argument to be passed on call
+Return value: Pointer to created timer
+
+Usage example:
+
+void timer_fn(void *data) {
+  // ...
+}
+
+mg_timer_add(mgr, 1000, MG_TIMER_REPEAT, timer_fn, NULL);
+struct mg_timer#
+struct mg_timer {
+  uint64_t period_ms;       // Timer period in milliseconds
+  uint64_t expire;          // Expiration timestamp in milliseconds
+  unsigned flags;           // Possible flags values below
+#define MG_TIMER_ONCE 0     // Call function once
+#define MG_TIMER_REPEAT 1   // Call function periodically
+#define MG_TIMER_RUN_NOW 2  // Call immediately when timer is set
+  void (*fn)(void *);       // Function to call
+  void *arg;                // Function argument
+  struct mg_timer *next;    // Linkage
+};
+Timer structure. Describes a software timer. Timer granularity is the same as the mg_mgr_poll() timeout argument in the main event loop.
+
+mg_timer_init()#
+void mg_timer_init(struct mg_timer **head,
+                   struct mg_timer *t, uint64_t period_ms, unsigned flags,
+                   void (*fn)(void *), void *fn_data);
+Setup a timer.
+
+Parameters:
+
+head - Pointer to mg_timer list head
+t - Pointer to mg_timer that should be initialized
+ms - An interval in milliseconds
+flags - Timer flags bitmask, MG_TIMER_REPEAT and MG_TIMER_RUN_NOW
+fn - Function to invoke
+fn_data - Function argument to be passed on call
+Return value: None
+
+Usage example:
+
+void timer_fn(void *data) {
+  // ...
+}
+
+struct mg_timer timer, *head = NULL;
+mg_timer_init(&head, &timer, 1000, MG_TIMER_REPEAT, timer_fn, NULL);
+mg_timer_free()#
+void mg_timer_free(struct mg_timer **head, struct mg_timer *t);
+Free timer, remove it from the internal timers list.
+
+Parameters:
+
+head - Pointer to mg_timer list head
+t - Timer to free
+Return value: None
+
+Usage example:
+
+struct mg_timer timer;
+// ...
+mg_timer_free(&timer);
+mg_timer_poll()#
+void mg_timer_poll(struct mg_timer **head, uint64_t uptime_ms);
+Traverse list of timers and call them if current timestamp uptime_ms is past the timer's expiration time.
+
+Note, that mg_mgr_poll function internally calls mg_timer_poll; therefore, in most cases it is unnecessary to call it explicitly.
+
+Parameters:
+
+head - Pointer to mg_timer list head
+uptime_ms - current timestamp
+Return value: None
+
+Usage example:
+
+mg_timer_poll(mg_millis());
+Time#
+mg_millis()#
+uint64_t mg_millis(void);
+Return current uptime in milliseconds.
+
+Parameters: None
+
+Return value: Current uptime
+
+Usage example:
+
+uint64_t uptime = mg_millis();
+mg_now()#
+uint64_t mg_now(void);
+Return current time in milliseconds, requires an SNTP server connection (see mg_sntp_connect())
+
+Parameters: None
+
+Return value: If an SNTP server connection has been configured, returns current time. Otherwise, returns current uptime just like mg_millis()
+
+Usage example:
+
+mg_sntp_connect(mgr&, NULL /* connect to time.google.com */, NULL, NULL);
+...
+uint64_t curtime = mg_now();
+String#
+struct mg_str#
+struct mg_str {
+  const char *buf;  // Pointer to string data
+  size_t len;       // String len
+};
+This structure represent an arbitrary chunk of memory, not necessarily zero-terminated. This is a "mongoose string", and it gets used extensively in the codebase instead of C zero-terminated strings.
+
+For example, when an HTTP request is received, Mongoose created a struct mg_http_message which has a collection of struct mg_str pointing to request method, URI, headers, and so on. This way, Mongoose avoids any heap allocations and does not modify the received buffer - instead, it uses struct mg_str to describe various parts of HTTP request.
+
+Same goes with many other cases.
+
+NOTE: since buf is not necessarily zero-terminated, do not use libc string functions against it - like strlen() or sscanf().
+
+mg_str()#
+struct mg_str mg_str(const char *s)
+Create Mongoose string from NULL-terminated C-string. This function doesn't duplicate provided string, and stores pointer within created mg_str structure.
+
+Note, that is you have problems in C++ (constructor shadowing), there is mg_str_s synonym for this function.
+
+Parameters:
+
+s - Pointer to NULL-terminated string to store in created mg_str
+Return value: Created Mongoose string
+
+Usage example:
+
+struct mg_str str = mg_str("Hello, world!);
+mg_str_n()#
+struct mg_str mg_str_n(const char *s, size_t n);
+Create Mongoose string from C-string s (can be non-NULL terminated, length is specified in n). Note: This function doesn't duplicate provided string, but stores pointer within created mg_str structure.
+
+Parameters:
+
+s - Pointer to string to store in created mg_str
+n - String length
+Return value: Created Mongoose string
+
+Usage example:
+
+struct mg_str str = mg_str_n("hi", 2);
+mg_casecmp()#
+int mg_casecmp(const char *s1, const char *s2);
+Case insensitive compare two NULL-terminated strings.
+
+Parameters:
+
+s1, s2 - Pointers to strings to compare
+Return value: Zero if strings are equal, more than zero if first argument is greater then second, and less than zero otherwise
+
+Usage example:
+
+if (mg_casecmp("hello", "HELLO") == 0) {
+  // Strings are equal
+}
+mg_strcmp()#
+int mg_strcmp(const struct mg_str str1, const struct mg_str str2);
+Compare two mongoose strings.
+
+Parameters:
+
+str1, str2 - Pointers to Mongoose strings to compare
+Return value: Zero if strings are equal, more than zero if first argument is greater than the second, and less than zero otherwise
+
+Usage example:
+
+struct mg_str str1 = mg_str("hello");
+struct mg_str str2 = mg_str("hello");
+if (mg_strcmp(str1, str2) == 0) {
+  // Strings are equal
+}
+mg_strcasecmp()#
+int mg_strcasecmp(const struct mg_str str1, const struct mg_str str2);
+Compare two mongoose strings, ignoring the case of the characters.
+
+Parameters:
+
+str1, str2 - Pointers to Mongoose strings to compare
+Return value: Zero if strings are equal, more than zero if first argument is greater than the second, and less than zero otherwise
+
+Usage example:
+
+struct mg_str str1 = mg_str("hello");
+struct mg_str str2 = mg_str("HELLO");
+if (mg_strcasecmp(str1, str2) == 0) {
+  // Strings are equal
+}
+mg_strdup()#
+struct mg_str mg_strdup(const struct mg_str s);
+Duplicate provided string. Return new string or MG_NULL_STR on error. Note: This function allocates memory for the returned string, you must free it using the mg_free function.
+
+Parameters:
+
+s - Mongoose string to duplicate
+Return value: Duplicated string
+
+Usage example:
+
+struct mg_str str1 = mg_str("hello");
+struct mg_str str2 = mg_strdup(str1);
+//...
+mg_free((void *)str2.buf);
+mg_match()#
+bool mg_match(struct mg_str str, struct mg_str pattern, struct mg_str *caps);
+Check if string str matches glob pattern pattern, and optionally capture wildcards into the provided array caps.
+
+NOTE: If caps is not NULL, then the caps array size must be at least the number of wildcard symbols in pattern plus 1. The last cap will be initialized to an empty string.
+
+The glob pattern matching rules are as follows:
+
+? matches any single character
+* matches zero or more characters except /
+# matches zero or more characters
+any other character matches itself
+Parameters:
+
+str - a string to match
+pattern - a pattern to match against
+caps - an optional array of captures for wildcard symbols ?, *, '#'
+Return value: true if matches, false otherwise
+
+Usage example:
+
+// Assume that hm->uri holds /foo/bar. Then we can match the requested URI:
+struct mg_str caps[3];  // Two wildcard symbols '*' plus 1
+if (mg_match(hm->uri, mg_str("/*/*"), caps)) {
+  // caps[0] holds `foo`, caps[1] holds `bar`.
+}
+mg_span()#
+bool mg_span(struct mg_str s, struct mg_str *a, struct mg_str *b, char delim);
+Span string s at the first occurence of character delim. Store the first part in a, and the rest of the string in b. Both a and b can be NULL. If delim is not present in s, then a spans to the end of s.
+
+Parameters:
+
+s - String being scanned
+a - Pointer to mg_str to store the prefix. Can be NULL
+b - Pointer to mg_str to store the rest. Can be NULL
+delim - A delimiter character
+Return value: true if s is non-empty, false if it is empty
+
+Usage example - scan comma-separated key=value pairs:
+
+struct mg_str entry, key, val;
+struct mg_str s = mg_str("a=333,b=777,hello");
+
+while (mg_span(s, &entry, &s, ',')) {
+  mg_span(entry, &key, &val, '=');
+  printf("key: %.*s, val: %.*s\n", (int) key.len, key.buf, (int) val.len, val.buf);
+}
+
+// This loop outputs the following:
+// key: a, val: 333
+// key: b, val: 777
+// key: hello, val:
+Function mg_commalist()
+mg_str\to\num()#
+bool mg_str_to_num(struct mg_str s, int base, void *val, size_t val_len);
+Parse the string s for unsigned numbers in base base. The result is stored at the address pointed to by val. No white space allowed.
+
+Parameters:
+
+s - String to parse
+base - Number base: 2 for binary, 10 for decimal, 16 for hex; or 0 for auto, in which case binary numbers must start with 0b and hexadecimal numbers with 0x. When the base is specified, do not prepend these.
+val - Where to store the number
+val_len - destination size; e.g.: sizeof(uint8_t) to sizeof(uint64_t)
+Return value: Returns true if a number has been parsed successfully
+
+Usage example:
+
+uint32_t val;
+mg_str_to_num(mg_str_n("010203", 6), 16, &val, sizeof(val)); // returns true and val is now 0x10203
+mg_path_is_sane()#
+bool mg_path_is_sane(struct mg_str path);
+Check path for starting with double dots in it.
+
+Parameters:
+
+path - Mongoose string to check
+Return value: true if OK, false otherwise
+
+Usage example:
+
+char data[] = "../../a.txt";
+bool res = mg_path_is_sane(mg_str(data));  // returns false
+mg_snprintf(), mg_vsnprintf()#
+size_t mg_snprintf(char *buf, size_t len, const char *fmt, ...);
+size_t mg_vsnprintf(char *buf, size_t len, const char *fmt, va_list ap);
+Print formatted string into a string buffer, just like snprintf() standard function does, but in a predictable way that does not depend on the C library or the build environment. The return value can be larger than the buffer length len, in which case the overflow bytes are not printed. Mongoose library supports two non-standard specifiers: %M and %m, for invoking custom print functions
+
+Parameters:
+
+buf - Pointer to pointer to output buffer
+len - Buffer size
+fmt - format string in printf semantics.
+Return value: Number of bytes printed
+
+Supported format specifiers:
+
+%c - expect char
+%f, %g - expect double
+%hhd, %hd, %d, %ld, %lld - for char, short, int, long, int64_t
+%hhu, %hu, %u, %lu, %llu - same but for unsigned variants
+%hhx, %hx, %x, %lx, %llx - same, unsigned and hex output
+%p - expects any pointer, prints 0x..... hex value
+%s - expects char *
+%% - prints the % character itself
+%X.Y - optional width and precision modifiers (e.g.: %1.2d)
+%.* - optional precision modifier, expected as int argument (e.g.: %.*d)
+%M - (EXTENSION) expects a pointer to a custom print function and its arguments
+%m - (EXTENSION) exactly like %M but double-quotes the output
+List of built-in print functions for %m or %M:
+
+mg_print_base64 - prints a buffer as a base64-encoded string
+mg_print_esc - prints a JSON-escaped string
+mg_print_hex - prints a buffer as a hex string
+mg_print_ip - prints an IP address in a struct mg_str
+mg_print_ip_port - prints IP address and port in a struct mg_str
+mg_print_ip4 - prints an IPv4 address
+mg_print_ip6 - prints an IPv6 address
+mg_print_mac - prints a MAC address
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "%lld", (int64_t) 123);                  // 123                  (64-bit integer)
+mg_snprintf(buf, sizeof(buf), "%.2s", "abcdef");                       // ab                   (part of a string)
+mg_snprintf(buf, sizeof(buf), "%.*s", 2, "abcdef");                    // ab                   (part of a string)
+mg_snprintf(buf, sizeof(buf), "%05x", 123);                            // 00123                (padded integer)
+mg_snprintf(buf, sizeof(buf), "%%-%3s", "a");                          // %-  a                (padded string)
+mg_snprintf(buf, sizeof(buf), "hi, %m", mg_print_base64, 1, "a");      // hi, "YWJj"           (base64-encode)
+mg_snprintf(buf, sizeof(buf), "[%m]", mg_print_esc, 0, "two\nlines");  // ["two\nlines"]       (JSON-escaped string)
+mg_snprintf(buf, sizeof(buf), "{%m:%g}", mg_print_esc, 0, "val", 1.2); // {"val": 1.2}         (JSON object)
+mg_snprintf(buf, sizeof(buf), "hi, %M", mg_print_hex, 3, "abc");       // hi, 616263           (hex-encode)
+mg_snprintf(buf, sizeof(buf), "IP: %M", mg_print_ip, &c->rem);         // IP: 1.2.3.4          (struct mg_addr)
+mg_snprintf(buf, sizeof(buf), "Peer: %M", mg_print_ip_port, &c->rem);  // Peer: 1.2.3.4:21345  (struct mg_addr with port)
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip4, "abcd");             // 97.98.99.100         (IPv4 address)
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip6, "abcdefghijklmnop"); // [4142:4344:4546:4748:494a:4b4c:4d4e:4f50]
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_mac, "abcdef");           // 61:62:63:64:65:66    (MAC address)
+It is easy to implement a custom print function. For example, to format a structure as JSON string:
+
+struct a { int a, b; };
+
+size_t print_a(void (*out)(char, void *), void *ptr, va_list *ap) {
+  struct a *p = va_arg(*ap, struct a *);
+  return mg_xprintf(out, ptr, "{%m:%d}", MG_ESC("a"), p->a); // MG_ESC invokes mg_print_esc
+}
+
+struct a temp = { 42, 43 };
+mg_snprintf(buf, sizeof(buf), "%M", print_a, &temp);    // {"a":42}
+mg_mprintf(), mg_vmprintf()#
+char *mg_mprintf(const char *fmt, ...);
+char *mg_vmprintf(const char *fmt, va_list *ap);
+Print message into an allocated memory buffer. Caller must mg_free() the result.
+
+Parameters:
+
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Return value: allocated memory buffer
+
+Usage example:
+
+char *msg = mg_mprintf("Build the message: %s", "hi!");
+mg_free(msg);
+mg_xprintf(), mg_vxprintf()#
+size_t mg_xprintf(void (*out)(char, void *), void *param, const char *fmt, ...);
+size_t mg_vxprintf(void (*out)(char, void *), void *param, const char *fmt,
+                   va_list *ap);
+Print message using a specified character output function
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Return value: Number of bytes printed
+
+Usage example:
+
+void myfn(char c, void *p);
+
+size_t len = mg_xprintf(myfn, myfn_p, "Print the string: %s!", "hi");
+mg_pfn_iobuf()#
+void mg_pfn_iobuf(char ch, void *param);
+Print a character to a Generic IO buffer
+
+Parameters:
+
+ch - char to be printed
+param - must be struct mg_iobuf *
+Usage example:
+
+mg_xprintf(mg_pfn_iobuf, &c->send, "hi!");  // Append to the output buffer
+mg_aton()#
+bool mg_aton(struct mg_str str, struct mg_addr *addr);
+Parse IP address held by str and store it in addr.
+
+Parameters:
+
+str - String to parse, for example 1.2.3.4, [::1], 01:02::03
+addr - Pointer to mg_addr string to receive parsed value
+Return value: true on success, false otherwise
+
+Usage example:
+
+struct mg_addr addr;
+if (mg_aton(mg_str("127.0.0.1"), &addr)) {
+  // addr is now binary representation of 127.0.0.1 IP address
+}
+JSON#
+Mongoose library is often used to exchange data in JSON format, therefore we have provided utility functions to format JSON strings easily:
+
+mg_http_reply(c, 200, "Content-Type: application/json\r\n",
+              "{%m: %u}", MG_ESC("value"), 123);  // {"value": 123}
+Therefore, for full JSON support, a set of parsing functions is required - which is described below.
+
+mg_json_get()#
+enum { MG_JSON_TOO_DEEP = -1, MG_JSON_INVALID = -2, MG_JSON_NOT_FOUND = -3 };
+int mg_json_get(struct mg_str json, const char *path, int *toklen);
+Parse JSON string json and return the offset of the element specified by the JSON path. The length of the element is stored in the toklen.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $, e.g. $.user
+toklen - a pointer that receives element's length, can be NULL
+Return value: offset of the element, or negative MG_JSON_* on error.
+
+Usage example:
+
+// Create a json string: { "a": 1, "b": [2, 3] }
+char *buf = mg_mprintf("{ %m: %d, %m: [%d, %d] }",
+                       MG_ESC("a"), 1,
+                       MG_ESC("b"), 2, 3);
+struct mg_str json = mg_str(buf);
+int offset, length;
+
+// Lookup "$", which is the whole JSON. Can be used for validation
+offset = mg_json_get(json, "$", &length);    // offset = 0, length = 23
+
+// Lookup attribute "a". Point to value "1"
+offset = mg_json_get(json, "$.a", &length);  // offset = 7, length = 1
+
+// Lookup attribute "b". Point to array [2, 3]
+offset = mg_json_get(json, "$.b", &length);  // offset = 15, length = 6
+
+// Lookup attribute "b[1]". Point to value "3"
+offset = mg_json_get(json, "$.b[1]", &length); // offset = 19, length = 1
+
+mg_free(buf);
+mg_json_get_tok()#
+struct mg_str mg_json_get_tok(struct mg_str json, const char *path);
+Parse JSON string json and return a struct mg_str pointing to the value of the element specified by the JSON path. Useful to check if a token is present, or inspect when it can have different types.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $, e.g. $.user
+Return value: a struct mg_str pointing to the value of the element, or with a NULL pointer on error.
+
+Usage example:
+
+  json = mg_str("{\"a\":\"b:c\"}");
+  val = mg_json_get_tok(json, "$.a"); // "b:c"
+mg_json_get_num()#
+bool mg_json_get_num(struct mg_str json, const char *path, double *v);
+Fetch numeric (double) value from the json string json at JSON path path into a placeholder v. Return true if successful.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+v - a placeholder for value
+Return value: true on success, false on error
+
+Usage example:
+
+double d = 0.0;
+mg_json_get_num(mg_str("[1,2,3]", "$[1]", &d));     // d == 2
+mg_json_get_num(mg_str("{\"a\":1.23}", "$.a", &d)); // d == 1.23
+mg_json_get_bool()#
+bool mg_json_get_bool(struct mg_str json, const char *path, bool *v);
+Fetch boolean (bool) value from the json string json at JSON path path into a placeholder v. Return true if successful.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+v - a placeholder for value
+Return value: true on success, false on error
+
+Usage example:
+
+bool b = false;
+mg_json_get_bool(mg_str("[123]", "$[0]", &b));   // Error. b remains to be false
+mg_json_get_bool(mg_str("[true]", "$[0]", &b));  // b is true
+mg_json_get_long()#
+long mg_json_get_long(struct mg_str json, const char *path, long default_val);
+Fetch integer numeric (long) value from the json string json at JSON path path. Return it if found, or default_val if not found.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+default_val - a default value for the failure case
+Return value: found value, or default_val value
+
+Usage example:
+
+long a = mg_json_get_long(mg_str("[123]", "$a", -1));   // a = -1
+long b = mg_json_get_long(mg_str("[123]", "$[0]", -1)); // b = 123
+mg_json_get_str()#
+char *mg_json_get_str(struct mg_str json, const char *path);
+Fetch string value from the json string json at JSON path path. If found, a string is allocated using mg_calloc(), un-escaped, and returned to the caller. It is the caller's responsibility to mg_free() the returned string.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+Return value: non-NULL on success, NULL on error
+
+Usage example:
+
+struct mg_str json = mg_str("{\"a\": \"hi\"}");  // json = {"a": "hi"}
+char *str = mg_json_get_str(json, "$.a");        // str = "hi"
+mg_free(str);
+mg_json_get_hex()#
+char *mg_json_get_hex(struct mg_str json, const char *path, int *len);
+Fetch hex-encoded buffer from the json string json at JSON path path. If found, a buffer is allocated using mg_calloc(), decoded, and returned to the caller. It is the caller's responsibility to mg_free() the returned string. Returned buffer is nul-terminated.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+len - a pointer that receives decoded length. Can be NULL
+Return value: non-NULL on success, NULL on error
+
+Usage example:
+
+struct mg_str json = mg_str("{\"a\": \"6869\"}"); // json = {"a": "6869"}
+char *str = mg_json_get_hex(json, "$.a", NULL);   // str = "hi"
+mg_free(str);
+mg_json_get_b64()#
+char *mg_json_get_b4(struct mg_str json, const char *path, int *len);
+Fetch base64-encoded buffer from the json string json at JSON path path. If found, a buffer is allocated using mg_calloc(), decoded, and returned to the caller. It is the caller's responsibility to mg_free() the returned string. Returned buffer is nul-terminated.
+
+Parameters:
+
+json - a string containing valid JSON
+path - a JSON path. Must start with $
+len - a pointer that receives decoded length. Can be NULL
+Return value: non-NULL on success, NULL on error
+
+Usage example:
+
+struct mg_str json = mg_str("{\"a\": \"YWJj\"}"); // json = {"a": "YWJj"}
+char *str = mg_json_get_b64(json, "$.a", NULL);   // str = "abc"
+mg_free(str);
+mg_json_unescape()#
+bool mg_json_unescape(struct mg_str str, char *buf, size_t len);
+Unescape a JSON string
+
+Parameters:
+
+str - a string containing valid JSON to be unescaped
+buf - buffer where to place the result
+len - buffer length
+Return value: true on success, false on error
+
+Usage example:
+
+struct mg_str str = mg_str("{\"a\": \"b\\u0063d\"}"); // escaped json = {"a": "b\u0063d"}
+char json[20];
+bool result = mg_json_unescape(str, result, 20);    // json = {"a": "bcd"}
+mg_json_next()#
+size_t mg_json_next(struct mg_str obj, size_t ofs, struct mg_str *key, struct mg_str *val);
+Iterate over elements of an object or array. An initial value for ofs must be 0, then on each iteration a previously returned value should be passed.
+
+Parameters:
+
+json - a string containing valid JSON
+ofs - an offset of the element
+key - a pointer that receives key. For arrays, set to empty. Can be NULL
+val - a pointer that receives value. Can be NULL
+Return value: non-0 on success, 0 when there are no more elements
+
+Usage example:
+
+struct mg_str key, val, obj = mg_str("{\"a\": [true], \"b\": 12345}");
+size_t ofs = 0;
+while ((ofs = mg_json_next(obj, ofs, &key, &val)) > 0) {
+  printf("%.*s -> %.*s\n", (int) key.len, key.buf, (int) val.len, val.buf);
+}
+For an example on how to iterate over an arbitrary JSON string, see json_scan() function in the unit test.
+
+RPC#
+Mongoose includes a set of functions to ease server-side processing by means of RPC methods.
+
+struct mg_rpc#
+The RPC method handler structure. Each method has an entry in a linked list, each entry points to a string describing the pattern that will invoke it and the function that will be called to satisfy the method invocation, with a proper function argument.
+
+struct mg_rpc {
+  struct mg_rpc *next;              // Next in list
+  struct mg_str method;             // Method pattern
+  void (*fn)(struct mg_rpc_req *);  // Handler function
+  void *fn_data;                    // Handler function argument
+};
+struct mg_rpc_req#
+The RPC request descriptor. An invoked method receives a descriptor containing the request, and a pointer to a function to be called to print the output response, with a proper function argument; e.g.: mg_pfn_realloc() or mg_pfn_iobuf()
+
+struct mg_rpc_req {
+  struct mg_rpc **head;  // RPC handlers list head
+  struct mg_rpc *rpc;    // RPC handler being called
+  mg_pfn_t pfn;          // Response printing function
+  void *pfn_data;        // Response printing function data
+  void *req_data;        // Arbitrary request data
+  struct mg_str frame;   // Request, e.g. {"id":1,"method":"add","params":[1,2]}
+};
+mg_rpc_add()#
+void mg_rpc_add(struct mg_rpc **head, struct mg_str method_pattern,
+                void (*handler)(struct mg_rpc_req *), void *handler_data);
+Add the method method_pattern to the list head of RPC methods. Invoking this method will call handler and pass handler_data to it with the request (as r->fn_data in the usage example below).
+
+Parameters:
+
+head - the linked list pointer
+method_pattern - the name of the method
+handler - the RPC function performing the action for this method
+handler_data - Arbitrary function data
+NOTE: if method_pattern is an empty string, this handler will be called to process JSON-RPC responses. Handling responses might be necessary if the JSON requests are initiated by both sides.
+
+Usage example:
+
+struct mg_rpc *s_rpc_head = NULL;
+
+static void rpc_sum(struct mg_rpc_req *r) {
+  double a = 0.0, b = 0.0;
+  mg_json_get_num(r->frame, "$.params[0]", &a);
+  mg_json_get_num(r->frame, "$.params[1]", &b);
+  mg_rpc_ok(r, "%g", a + b);
+}
+
+static void rpc_mul(struct mg_rpc_req *r) {//...}
+
+
+  mg_rpc_add(&s_rpc_head, mg_str("sum"), rpc_sum, NULL);
+  mg_rpc_add(&s_rpc_head, mg_str("mul"), rpc_mul, NULL);
+mg_rpc_del()#
+void mg_rpc_del(struct mg_rpc **head, void (*handler)(struct mg_rpc_req *));
+Remove the method with RPC function handler handler from the list head of RPC methods.
+
+Parameters:
+
+head - the linked list pointer
+handler - the RPC function performing the action for this method, use NULL to deallocate all
+Usage example:
+
+struct mg_rpc *s_rpc_head = NULL;
+// add methods
+// ...
+
+// Time to cleanup
+mg_rpc_del(&s_rpc_head, rpc_mul);    // Deallocate specific handler
+mg_rpc_del(&s_rpc_head, NULL);       // Deallocate all RPC handlers
+mg_rpc_process()#
+void mg_rpc_process(struct mg_rpc_req *req);
+Invoke the proper method for this request. If the requested method does not exist, mg_rpc_err() will be invoked and an error indication will be printed
+
+Parameters:
+
+req - a request
+Usage example:
+
+struct mg_rpc *s_rpcs = NULL;                               // Empty RPC list head
+mg_rpc_add(&s_rpcs, mg_str("rpc.list"), mg_rpc_list, NULL); // Add rpc.list
+// ... add more RPC methods
+
+// On request, process the incoming frame
+struct mg_str req = mg_str("{\"id\":1,\"method\":\"sum\",\"params\":[1,2]}");
+struct mg_iobuf io = {0, 0, 0, 512};  // Empty IO buf, with 512 realloc granularity
+struct mg_rpc_req r = {
+  .head = &s_rpcs,        // RPC list head
+  .rpc = NULL,            // This will be set by mg_rpc_process()
+  .pfn = mg_pfn_iobuf,    // Printing function: print into the io buffer
+  .pfn_data = &io,        // Pass our io buffer as a parameter
+  .req_data = NULL,       // No specific request data
+  .frame = req,           // Specify incoming frame
+};
+
+mg_rpc_process(&r);
+if (io.buf != NULL) printf("Response: %s\n", (char *) io.buf);
+mg_iobuf_free(&io);
+mg_rpc_ok(), mg_rpc_vok()#
+void mg_rpc_ok(struct mg_rpc_req *, const char *fmt, ...);
+void mg_rpc_vok(struct mg_rpc_req *, const char *fmt, va_list *ap);
+Helper functions to print result frames
+
+Parameters:
+
+req - a request
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Usage example:
+
+static void rpc_sum(struct mg_rpc_req *r) {
+  double a = 0.0, b = 0.0;
+  mg_json_get_num(r->frame, "$.params[0]", &a);
+  mg_json_get_num(r->frame, "$.params[1]", &b);
+  mg_rpc_ok(r, "%g", a + b);
+}
+mg_rpc_err(), mg_rpc_verr()#
+void mg_rpc_err(struct mg_rpc_req *, int code, const char *fmt, ...);
+void mg_rpc_verr(struct mg_rpc_req *, int code, const char *fmt, va_list *);
+Helper functions to print error frames
+
+Parameters:
+
+req - a request
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Usage example:
+
+static void rpc_dosome(struct mg_rpc_req *r) {
+  ...
+  mg_rpc_err(r, -32109, "\"%.*s not found\"", len, &r->frame.buf[offset]);
+}
+mg_rpc_list()#
+void mg_rpc_list(struct mg_rpc_req *r);
+Built-in RPC method to list all registered RPC methods. This function is not usually called directly, but registered as a method.
+
+Parameters:
+
+req - a request
+Usage example:
+
+mg_rpc_add(&s_rpc_head, mg_str("rpc.list"), mg_rpc_list, &s_rpc_head);
+(see also mg_rpc_add())
+
+Utility#
+mg_call()#
+void mg_call(struct mg_connection *c, int ev, void *ev_data);
+Send ev event to c event handler. This function is useful then implementing your own protocol.
+
+Parameters:
+
+c - Connection to send event
+ev - Event to send
+ev_data - Additional event parameter
+Return value: None
+
+Usage example:
+
+// In a timer callback, send MG_EV_USER event to all connections
+static void timer_fn(void *arg) {
+  struct mg_mgr *mgr = (struct mg_mgr *) arg;
+  for (struct mg_connection *c = mgr->conns; c != NULL; c = c->next) {
+    mg_call(c, MG_EV_USER, "hi!");
+  }
+}
+mg_error()#
+void mg_error(struct mg_connection *c, const char *fmt, ...);
+Send MG_EV_ERROR to connection event handler with error message formatted using printf semantics.
+
+Parameters:
+
+c - Connection to send event
+fmt - Format string in printf semantics
+Return value: None
+
+Usage example:
+
+mg_error(c, "Operation failed, error code: %d", errno);
+mg_md5_init()#
+void mg_md5_init(mg_md5_ctx *c);
+Initialize context for MD5 hashing.
+
+Parameters:
+
+c - Pointer to mg_md5_ctx structure to initialize
+Return value: None
+
+Usage example:
+
+mg_md5_ctx ctx;
+mg_md5_init(&ctx);
+mg_md5_update()#
+void mg_md5_update(mg_md5_ctx *c, const unsigned char *data, size_t len);
+Hash len bytes of data pointed by data using MD5 algorithm.
+
+Parameters:
+
+c - MD5 context
+data - Data to hash
+len - Data length
+Return value: None
+
+Usage example:
+
+mg_md5_ctx ctx;
+// Context initialization
+// ...
+
+mg_md5_update(&ctx, "data", 4);       // hash "data" string
+mg_md5_update(&ctx, "more data", 9);  // hash "more data" string
+mg_md5_final()#
+void mg_md5_final(mg_md5_ctx *c, unsigned char buf[16]);
+Get current MD5 hash for context.
+
+Parameters:
+
+c - MD5 context
+buf - Pointer to buffer to write MD5 hash value
+Return value: None
+
+Usage example:
+
+mg_md5_ctx ctx;
+// Context initialization
+// ...
+
+unsigned char buf[16];
+mg_md5_final(&ctx, buf);  // `buf` is now MD5 hash
+mg_sha1_init()#
+void mg_sha1_init(mg_sha1_ctx *c);
+Initialize context for calculating SHA1 hash
+
+Parameters:
+
+c - pointer to mg_sha1_ctx structure to initialize
+Return value: none
+
+Usage example:
+
+mg_sha1_ctx ctx;
+mg_sha1_init(&ctx);
+mg_sha1_update()#
+void mg_sha1_update(mg_sha1_ctx *c, const unsigned char *data, size_t len);
+Hash len bytes of data using SHA1 algorithm.
+
+Parameters:
+
+c - SHA1 context
+data - Data to hash
+len - Data length
+Return value: None
+
+Usage example:
+
+mg_sha1_ctx ctx;
+// Context initialization
+// ...
+
+mg_sha1_update(&ctx, "data", 4);      // hash "data" string
+mg_sha1_update(&ctx, "more data", 9); // hash "more data" string
+mg_sha1_final()#
+void mg_sha1_final(unsigned char digest[20], mg_sha1_ctx *c);
+Get current SHA1 hash for context.
+
+Parameters:
+
+c - SHA1 context
+digest - Pointer to buffer to receive hash value
+Return value: None
+
+Usage example:
+
+mg_sha1_ctx ctx;
+// Context initialization
+// ...
+
+unsigned char buf[20];
+mg_sha1_final(buf, &ctx); // `buf` is now SHA1 hash
+mg_base64_update()#
+size_t mg_base64_update(unsigned char p, char *buf, size_t len);
+Encode p byte to base64 and write result into buf buffer
+
+Parameters:
+
+p - Byte to encode
+buf - Pointer to buffer to write result
+len - Buffer length
+Return value: Number of chars written into buffer
+
+Usage example:
+
+char buf[10];
+mg_base64_update((unsigned char)"a", buf, 10); // Encode "a" into base64 and write it to buf
+mg_base64_final()#
+size_t mg_base64_final(char *buf, size_t len);
+Add base64 finish mark and \0 symbol to buf
+
+Parameters:
+
+buf - Pointer to buffer to write finish mark
+len - Buffer length
+Return value: Number of chars written into buffer
+
+char buf[10];
+// ...
+
+mg_base64_final(buf, 10);
+mg_base64_encode()#
+size_t mg_base64_encode(const unsigned char *p, size_t n, char *buf, size_t len);
+Encode n bytes data pointed to by p using base64 and write result into buf.
+
+Parameters:
+
+p - Pointer to data to encode
+n - Data length
+buf - Pointer to buffer to write result
+len - Buffer length
+Return value: Number of chars written into buffer
+
+Usage example:
+
+char buf[128];
+mg_base64_encode((uint8_t *) "abcde", 5, buf, 128); // buf is now YWJjZGU=
+mg_base64_decode()#
+size_t mg_base64_decode(const char *src, size_t n, char *dst, size_t len);
+Decode n bytes of base64-ed src and write it to dst.
+
+Parameters:
+
+src - Data to decode
+n - Data length
+dst - Pointer to output buffer
+len - Buffer length
+Return value: Number of chars written into buffer
+
+Usage example:
+
+char buf[128];
+mg_base64_decode("Q2VzYW50YQ==", 12, buf, 128); // buf is now "Cesanta"
+mg_random()#
+bool mg_random(void *buf, size_t len);
+Fill in buffer buf, len with random data. Note: Mongoose uses this function for TLS and some other routines that require RNG (random number generator). It is possible to override a built-in mg_random() by specifying a MG_ENABLE_CUSTOM_RANDOM=1 build preprocessor constant.
+
+Parameters:
+
+buf - Pointer to buffer to receive random data
+len - Buffer size
+Return value: This function returns false when the system rand() has to be used, because a stronger PRNG for the configured MG_ARCH could not be found.
+
+Usage example:
+
+char buf[10];
+mg_random(buf, sizeof(buf)); // `buf` is now random bytes
+mg_random_str()#
+char *mg_random_str(char *buf, size_t len);
+Fill in buffer buf, len with random alphanumeric characters: a-zA-Z0-9. A buffer is zero-terminated.
+
+Parameters:
+
+buf - a pointer to a buffer
+len - a buffer size
+Return value: buf value.
+
+Usage example:
+
+char buf[10];
+printf("Random: %s\n", mg_random_str(buf, sizeof(buf)));
+mg_ntohs()#
+uint16_t mg_ntohs(uint16_t net);
+Convert uint16_t value to host order.
+
+Parameters:
+
+net - 16-bit value in network order
+Return value: 16-bit value in host order
+
+Usage example:
+
+uint16_t val = mg_ntohs(0x1234);
+mg_ntohl()#
+uint32_t mg_ntohl(uint32_t net);
+Convert uint32_t value to host order.
+
+Parameters:
+
+net - 32-bit value in network order
+Return value: 32-bit value in host order
+
+Usage example:
+
+uint32_t val = mg_ntohl(0x12345678);
+mg_htons()#
+uint16_t mg_htons(uint16_t h);
+Convert uint16_t value to network order.
+
+Parameters:
+
+h - 16-bit value in host order
+Return value: 16-bit value in network order
+
+Usage example:
+
+uint16_t val = mg_htons(0x1234);
+mg_htonl()#
+uint32_t mg_ntohl(uint32_t h);
+Convert uint32_t value to network order.
+
+Parameters:
+
+h - 32-bit value in host order
+Return value: 32-bit value in network order
+
+Usage example:
+
+uint32_t val = mg_htonl(0x12345678);
+mg_crc32()#
+uint32_t mg_crc32(uint32_t crc, const char *buf, size_t len);
+Calculate CRC32 checksum for a given buffer. An initial crc value should be 0.
+
+Parameters:
+
+crc - Initial CRC value
+buf - Data to calculate CRC32
+len - Data size
+Return value: Calculated CRC32 checksum
+
+Usage example:
+
+char data[] = "hello";
+uint32_t crc = mg_crc32(0, data, sizeof(data));
+mg_check_ip_acl()#
+int mg_check_ip_acl(struct mg_str acl, struct mg_addr *remote_ip);
+Check IP address remote_ip against the IP ACL acl.
+
+Currently, only the IPv4 address format is supported for the ACL string.
+
+Parameters:
+
+acl - an ACL string, e.g. -0.0.0.0/0,+1.2.3.4
+remote_ip - an IP address
+Return value: 1 if remote_ip is allowed, 0 if not, and <0 if acl is invalid
+
+Usage example:
+
+if (mg_check_ip_acl(mg_str("-0.0.0.0/0,+1.2.3.4"), c->rem) != 1) {
+  LOG(LL_INFO, ("NOT ALLOWED!"));
+}
+mg_url_decode()#
+int mg_url_decode(const char *src, size_t src_len, char *dst, size_t dst_len, int form);
+Decode URL-encoded string s and write it into to buffer.
+
+Parameters:
+
+src - String to decode
+src_len - Length of the string to decode
+dst - Pointer to output buffer
+dst_len - Output buffer size
+form - If non-zero, then + is decoded as whitespace.
+Return value: Decoded bytes count or negative value on error
+
+Usage example:
+
+char url[] = "eexample.org%2Ftest";
+char buf[1024];
+mg_url_encode(url, sizeof(url) - 1, buf, sizeof(buf), 0); // buf is now "example.org/test"
+mg_url_encode#
+size_t mg_url_encode(const char *s, size_t n, char *buf, size_t len);
+Encode s string to URL-encoding and write encoded string into buf.
+
+Parameters:
+
+s - String to encode
+n - String to encode length
+buf - Output buffer
+len - Output buffer size
+Return value: Number of characters written to buf
+
+Usage example:
+
+char url[] = "example.org/test";
+char buf[1024];
+mg_url_encode(url, sizeof(url) - 1, buf, sizeof(buf)); // buf is now "example.org%2Ftest"
+mg_print_base64#
+size_t mg_print_base64(void (*out)(char, void *), void *param, va_list *ap);
+Print a buffer as a base64-encoded string. Expects data length and a pointer to the data as next arguments in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "hi, %m", mg_print_base64, 1, "a");  // hi, "YWJj"
+mg_print_esc#
+size_t mg_print_esc(void (*out)(char, void *), void *param, va_list *ap);
+Print a JSON-escaped string. Expects string length and a pointer to the string in the va_list ap. For null-terminated strings use 0 for string length, or the macro MG_ESC()
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "{%m: %u}", MG_ESC("value"), 123);           // {"value": 123}
+mg_snprintf(buf, sizeof(buf), "{%m: %u}", mg_print_esc, 0, "value", 123);  // {"value": 123}
+mg_print_hex#
+size_t mg_print_hex(void (*out)(char, void *), void *param, va_list *ap);
+Print a buffer as a hex-encoded string. Expects data length and a pointer to the data as next arguments in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "hi, %M", mg_print_hex, 1, 255);  // hi, ff
+mg_print_ip#
+size_t mg_print_ip(void (*out)(char, void *), void *param, va_list *ap);
+Print an IP address using a specified character output function. Expects a pointer to a struct mg_addr as the next argument in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+struct mg_addr addr;
+addr.ip = MG_U32('a', 'b', 'c', 'd');
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip, &addr);         // 97.98.99.100
+mg_print_ip_port#
+size_t mg_print_ip_port(void (*out)(char, void *), void *param, va_list *ap);
+Print an IP address and port, using a specified character output function. Expects a pointer to a struct mg_addr as the next argument in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+struct mg_addr addr;
+addr.ip = MG_U32('a', 'b', 'c', 'd');
+addr.port = mg_htons(1234);
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip_port, &addr);         // 97.98.99.100:1234
+mg_print_ip4#
+size_t mg_print_ip4(void (*out)(char, void *), void *param, va_list *ap);
+Print an IP address using a specified character output function. Expects a pointer to a buffer containing the IPv4 address in network order as the next argument in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip4, "abcd");         // 97.98.99.100
+mg_print_ip6#
+size_t mg_print_ip6(void (*out)(char, void *), void *param, va_list *ap);
+Print an IPv6 address using a specified character output function. Expects a pointer to a buffer containing the IPv6 address in network order as the next argument in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_ip6, "abcdefghijklmnop");         // [4142:4344:4546:4748:494a:4b4c:4d4e:4f50]
+mg_print_mac#
+size_t mg_print_mac(void (*out)(char, void *), void *param, va_list *ap);
+Print a MAC address using a specified character output function. Expects a pointer to a buffer containing the hardware address as the next argument in the va_list ap
+
+Parameters:
+
+out - function to be used for printing chars
+param - argument to be passed to out
+Return value: Number of bytes printed
+
+Usage example:
+
+mg_snprintf(buf, sizeof(buf), "%M", mg_print_mac, "abcdef");          // 61:62:63:64:65:66
+IO Buffers#
+IO buffer, described by the struct mg_iobuf, is a simple data structure that inserts or deletes chunks of data at arbitrary offsets and grows/shrinks automatically.
+
+struct mg_iobuf#
+struct mg_iobuf {
+  unsigned char *buf;  // Pointer to stored data
+  size_t size;         // Total size available
+  size_t len;          // Current number of bytes
+  size_t align;        // Alignment during allocation
+};
+Generic IO buffer. The size specifies an allocation size of the data pointed by buf, and len specifies number of bytes currently stored.
+
+struct mg_iobuf diagram
+mg_iobuf_init()#
+int mg_iobuf_init(struct mg_iobuf *io, size_t size, size_t align);
+Initialize IO buffer, allocate size bytes.
+
+Parameters:
+
+io - Pointer to mg_iobuf structure to initialize
+size - Amount of bytes to allocate
+align - Align size to the align mem boundary. 0 means no alignment
+Return value: 1 on success, 0 on allocation failure
+
+Usage example:
+
+struct mg_iobuf io;
+if (mg_iobuf_init(&io, 0, 64)) {
+  // io successfully initialized
+}
+mg_iobuf_resize()#
+int mg_iobuf_resize(struct mg_iobuf *io, size_t size);
+Resize IO buffer, set the new size to size. The io->buf pointer could change after this, for example if the buffer grows. If size is 0, then the io->buf is freed and set to NULL, and both size and len are set to 0. The resulting io->size is always aligned to the io->align byte boundary; therefore, to avoid memory fragmentation and frequent reallocations, set io->align to a higher value.
+
+Parameters:
+
+io - iobuf to resize
+size - New size
+Return value: 1 on success, 0 on allocation failure
+
+Usage example:
+
+struct mg_iobuf io;
+mg_iobuf_init(&io, 0, 10);  // An empty buffer with 10-byte alignment
+
+if (mg_iobuf_resize(&io, 1)) {
+  // New io size is 10
+}
+mg_iobuf_free()#
+void mg_iobuf_free(struct mg_iobuf *io);
+Free memory pointed by io->buf and set to NULL. Both size and len are set to 0.
+
+Parameters:
+
+io - iobuf to free
+Return value: None
+
+Usage example:
+
+struct mg_iobuf io;
+// IO buffer initialization
+// ...
+
+// Time to cleanup
+mg_iobuf_free(&io);
+mg_iobuf_add()#
+size_t mg_iobuf_add(struct mg_iobuf *io, size_t offset, const void *buf, size_t len);
+Insert data buffer buf, len at offset offset. The iobuf is expanded if required. The resulting io->size is always aligned to the io->align byte boundary; therefore, to avoid memory fragmentation and frequent reallocations, set align to a higher value.
+
+Parameters:
+
+io - iobuf to add data
+offset - Offset to add data
+buf - Data to add
+len - Data length
+Return value: new io length
+
+Usage example:
+
+struct mg_iobuf io;         // Declare buffer
+mg_iobuf_init(&io, 0, 16);  // Initialise empty buffer with 16 byte alignment
+Function mg_iobuf_init()
+mg_iobuf_add(&io, io.len, "hello", 5);  // Append "hello"
+Function mg_iobuf_add()
+mg_iobuf_del()#
+size_t mg_iobuf_del(struct mg_iobuf *io, size_t offset, size_t len);
+Delete up to len bytes starting from offset, shifting the remaining bytes, as detailed in the graph below. There is no further action on the iobuf, offset and len are capped to operate within current iobuf size.
+
+Parameters:
+
+io - iobuf to delete data
+offset - Start offset
+len - Number of bytes to delete
+Return value: Number of bytes actually deleted
+
+Usage example:
+
+struct mg_iobuf io;
+mg_iobuf_init(&io, 0, 16);          // Empty buffer, 16-bytes aligned
+mg_iobuf_add(&io, 0, "hello", 5);   // io->len is 5, io->size is 16
+mg_iobuf_del(&io, 1, 3);            // io->len is 2, io->size is still 16
+Function mg_iobuf_del()
+Queue#
+Single-producer single-consumer non-blocking queue
+
+struct mg_queue#
+struct mg_queue {
+  char *buf;
+  size_t size;
+  volatile size_t tail;
+  volatile size_t head;
+};
+mg_queue_init#
+void mg_queue_init(struct mg_queue *q, char *buf, size_t size);
+Initialize a queue
+
+Parameters:
+
+q - pointer to an mg_queue structure
+size - queue size in bytes
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+mg_queue_book#
+size_t mg_queue_book(struct mg_queue *q, char **ptr, size_t len);
+Reserve space in a queue
+
+Parameters:
+
+q - pointer to an mg_queue structure
+ptr - pointer to where to store the address of the reserved space in the queue
+len - number of bytes requested
+Return value: number of bytes actually reserved
+
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+char *ptr;
+if (mg_queue_book(&q, &ptr, len) < len) {
+  // Not enough space
+} else {
+  // Go ahead, memory area pointed to by ptr
+}
+mg_queue_add#
+void mg_queue_add(struct mg_queue *q, size_t len);
+Add a new message to a queue
+
+Parameters:
+
+q - pointer to an mg_queue structure
+len - Data length
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+char *ptr;
+if (mg_queue_book(&q, &ptr, len) < len) {
+  // Not enough space
+} else {
+  memcpy(ptr, my_data, len);  // Copy data to the queue
+  mg_queue_add(&q, len);      // Add a new message to the queue
+}
+mg_queue_next#
+size_t mg_queue_next(struct mg_queue *q, char **ptr);
+Get the oldest message in a queue
+
+Parameters:
+
+q - pointer to an mg_queue structure
+ptr - pointer to where to store the address of the message in the queue
+Return value: number of bytes in message, 0 if no outstanding messages
+
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+...
+char *ptr;
+size_t len;
+if ((len = mg_queue_next(&q, &ptr)) > 0) {
+  // message data pointed to by ptr
+} else {
+  // no messages
+}
+mg_queue_del#
+void mg_queue_del(struct mg_queue *q, size_t len);
+Delete len bytes, oldest message in queue
+
+Parameters:
+
+q - pointer to an mg_queue structure
+len - number of bytes to delete
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+...
+char *ptr;
+if ((len = mg_queue_next(&q, &ptr)) > 0) {
+  memcpy(somewhere, ptr, len);
+  mg_queue_del(&q, len);
+} else {
+  // no messages
+}
+mg_queue_printf()#
+size_t mg_queue_printf(struct mg_queue *q, const char *fmt, ...);
+Print message into a queue. Internally calls mg_queue_book() and mg_queue_add(), with the conveniency of printf. The format string is evaluated first to calculate needed room and then again to actually print if there is available room in the queue; pay attention to side effects when calling.
+
+Parameters:
+
+q - pointer to an mg_queue structure
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Return value: number of bytes printed
+
+Usage example:
+
+struct mg_queue q;
+char buf[100];
+mg_queue_init(&q, buf, sizeof(buf));
+mg_queue_printf(&q, "hi %s", "Peter");
+URL#
+mg_url_port()#
+unsigned short mg_url_port(const char *url);
+Return port for given URL
+
+Parameters:
+
+url - URL to extract port
+Return value: Port for given URL or 0 if URL doesn't contain port and there isn't default port for URL protocol
+
+Usage example:
+
+unsigned short port1 = mg_url_port("https://myhost.com") // port1 is now 443 (default https port)
+unsigned short port2 = mg_url_port("127.0.0.1:567") // port2 is now 567
+mg_url_is_ssl()#
+int mg_url_is_ssl(const char *url);
+Check if given URL uses an encrypted scheme
+
+Parameters:
+
+url - URL to check
+Return value: non-zero if given URL uses an encrypted scheme, zero otherwise
+
+Usage example:
+
+if (mg_url_is_ssl("https://example.org")) {
+  // scheme is encrypted
+}
+mg_url_host()#
+struct mg_str mg_url_host(const char *url);
+Extract host name from given URL.
+
+Parameters:
+
+url - a URL string
+Return value: host name
+
+Usage example:
+
+struct mg_str a = mg_url_host("https://my.example.org:1234"); // a == "my.example.org"
+struct mg_str b = mg_url_host("tcp://[::1]"); // b == "[::1]"
+mg_url_user()#
+struct mg_str mg_url_user(const char *url);
+Extract user name from given URL.
+
+Parameters:
+
+url - URL to extract user name
+Return value: User name or empty string if not found
+
+Usage example:
+
+struct mg_str user_name = mg_url_user("https://user@password@my.example.org"); // user_name is now "user"
+mg_url_pass()#
+struct mg_str mg_url_pass(const char *url);
+Extract password from given URL.
+
+Parameters:
+
+url - URL to extract password
+Return value: Password or empty string if not found
+
+Usage example:
+
+struct mg_str pwd = mg_url_user("https://user@password@my.example.org"); // pwd is now "password"
+mg_url_uri()#
+const char *mg_url_uri(const char *url);
+Extract URI from given URL. Note, that function returns a pointer within url; there is no need to free it explicitly
+
+Parameters:
+
+url - URL to extract URI
+Return value: URI or \ if not found
+
+Usage example:
+
+const char *uri = mg_url_uri("https://example.org/subdir/subsubdir"); // `uri` is now pointer to "subdir/subsubdir"
+Logging#
+Mongoose provides a set of functions and macros for logging. The application can use these functions for its own purposes as well as the rest of Mongoose API.
+
+LOG()#
+#define LOG(level, args)
+#define MG_ERROR(args) MG_LOG(MG_LL_ERROR, args)
+#define MG_INFO(args) MG_LOG(MG_LL_INFO, args)
+#define MG_DEBUG(args) MG_LOG(MG_LL_DEBUG, args)
+#define MG_VERBOSE(args) MG_LOG(MG_LL_VERBOSE, args)
+Logging macros. Usage example:
+
+MG_INFO(("Hello %s!", "world"));  // Output "Hello, world"
+mg_log_set()#
+void mg_log_set(int level);
+Set Mongoose logging level.
+
+Parameters:
+
+level - log level, can be one of the following values:
+MG_LL_NONE - Disable logging
+MG_LL_ERROR - Log errors only
+MG_LL_INFO - Log errors and info messages
+MG_LL_DEBUG - Log errors, info and debug messages
+MG_LL_VERBOSE - Log everything, and more
+Return value: None
+
+Usage example:
+
+mg_log_set(MG_LL_INFO);                  // Set log level to info
+mg_hexdump()#
+void mg_hexdump(const void *buf, int len);
+Log a hex dump of binary data buf, len.
+
+Parameters:
+
+buf - Data pointer
+len - Data length
+Return value: none
+
+Usage example:
+
+mg_hexdump(c->recv.buf, c->recv.len);  // Hex dump incoming data
+mg_log_set_fn()#
+void mg_log_set_fn(mg_pfn_t logfunc, void *param);
+Redirect logs to a custom function. Parameters:
+
+logfunc - a pointer to a function that logs a single character
+param - a parameter for a logging function
+Usage example: redirecting logs to syslog.
+
+static void mylog(char ch, void *param) {
+  static char buf[256];
+  static size_t len;
+  buf[len++] = ch;
+  if (ch == '\n' || len >= sizeof(buf)) {
+    syslog(LOG_INFO, "%.*s", (int) len, buf); // Send logs
+    len = 0;
+  }
+}
+...
+mg_log_set_fn(mylog, NULL);
+Filesystem#
+struct mg_fs#
+struct mg_fs {
+  int (*st)(const char *path, size_t *size, time_t *mtime);               // stat file
+  void (*ls)(const char *path, void (*fn)(const char *, void *), void *); // List directory entries: call fn(file_name, fn_data) for each directory entry
+  void *(*op)(const char *path, int flags);                               // Open file
+  void (*cl)(void *fd);                                                   // Close file
+  size_t (*rd)(void *fd, void *buf, size_t len);                          // Read file
+  size_t (*wr)(void *fd, const void *buf, size_t len);                    // Write file
+  size_t (*sk)(void *fd, size_t offset);                                  // Set file position
+  bool (*mv)(const char *from, const char *to);                           // Rename file
+  bool (*rm)(const char *path);                                           // Delete file
+  bool (*mkd)(const char *path);                                          // Create directory
+};
+
+enum { MG_FS_READ = 1, MG_FS_WRITE = 2, MG_FS_DIR = 4 };
+Filesystem virtualisation layer.
+
+Mongoose allows to override file IO operations in order to support different storages, like programmable flash, no-filesystem devices etc. In order to accomplish this, Mongoose provides a struct mg_fs API to specify a custom filesystem. In addition to this, Mongoose provides several built-in APIs - a standard POSIX, FatFS, and a "packed FS" API:
+
+extern struct mg_fs mg_fs_posix;   // POSIX open/close/read/write/seek
+extern struct mg_fs mg_fs_packed;  // Packed FS, see tutorials/core/embedded-filesystem
+extern struct mg_fs mg_fs_fat;     // FAT FS
+struct mg_fd#
+struct mg_fd {
+  void *fd;
+  struct mg_fs *fs;
+};
+Opened file abstraction.
+
+mg_fs_open()#
+struct mg_fd *mg_fs_open(struct mg_fs *fs, const char *path, int flags);
+Open a file in a given filesystem.
+
+Parameters:
+
+fs - a filesystem implementation
+path - a file path
+flags - desired flags, a combination of MG_FS_READ and MG_FS_WRITE
+Return value: a non-NULL opened descriptor, or NULL on failure.
+
+Usage example:
+
+struct mg_fd *fd = mg_fs_open(&mg_fs_posix, "/tmp/data.json", MG_FS_WRITE);
+mg_fs_close()#
+void mg_fs_close(struct mg_fd *fd);
+Close an opened file descriptor.
+
+Parameters:
+
+fd - an opened file descriptor
+Return value: none
+
+mg_file_read()#
+struct mg_str mg_file_read(struct mg_fs *fs, const char *path);
+Read the whole file in memory. This allocates memory that must be freed by calling mg_free
+
+Parameters:
+
+fs - a filesystem implementation
+path - a file path
+Return value: on success, the struct mg_str points to file data, which is guaranteed to be nul-terminated, and its len field contains file length. On error, it contains a NULL pointer.
+
+Usage example:
+
+struct mg_str data = mg_file_read(&mg_fs_packed, "/data.json"); // size = data.len
+mg_free(data.buf);
+mg_file_write()#
+bool mg_file_write(struct mg_fs *fs, const char *path, const void *buf, size_t len);
+Write a piece of data buf, len to a file path. If the file does not exist, it gets created. The previous content, if any, is deleted.
+
+Parameters:
+
+fs - a filesystem implementation
+path - a file path
+buf - a pointer to data to be written
+len - data size
+Return value: true on success, false on error
+
+Usage example:
+
+mg_file_write(&mg_fs_fat, "/test.txt", "hi\n", 3);
+mg_file_printf()#
+bool mg_file_printf(struct mg_fs *fs, const char *path, const char *fmt, ...);
+Write a printf-formatted data to a file path. If the file does not exist, it gets created. The previous content, if any, is deleted.
+
+Parameters:
+
+fs - a filesystem implementation
+path - a file path
+fmt - format string in printf semantics. See mg_snprintf for the list of supported format specifiers
+Return value: true on success, false on error
+
+Usage example:
+
+mg_file_printf(&mg_fs_fat, "/test.txt", "%s\n", "hi");
+mg_fs_ls()#
+bool mg_fs_ls(struct mg_fs *fs, const char *path, char *buf, size_t len);
+Helper function to scan a filesystem in a sequential way, without using a callback function. Each call will return one entry until the list is exhausted
+
+Parameters:
+
+fs - a filesystem implementation
+path - a file path
+buf - a pointer to where to store the results
+len - buffer size
+Return value: true if there are more entries, need to call again; false when no more entries left.
+
+Usage example:
+
+  char buf[100] = "";
+  while (mg_fs_ls(&mg_fs_posix, "./", buf, sizeof(buf)))
+    puts(buf);
