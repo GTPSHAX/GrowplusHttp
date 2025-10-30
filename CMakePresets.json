@@ -1,0 +1,371 @@
+{
+  "version": 8,
+  "configurePresets": [
+    {
+      "name": "MSVS Community 2022 amd86 - debug",
+      "displayName": "MSVS Community 2022 amd86 - debug",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=x86",
+      "architecture": "win32",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "MSVS Community 2022 amd86 - release",
+      "displayName": "MSVS Community 2022 amd86 - release",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=x86",
+      "architecture": "win32",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "MSVS Community 2022 amd64 - debug",
+      "displayName": "MSVS Community 2022 amd64 - debug",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "MSVS Community 2022 amd64 - release",
+      "displayName": "MSVS Community 2022 amd64 - release",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "MSVS Community 2022 arm86 - debug",
+      "displayName": "MSVS Community 2022 arm86 - debug",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "MSVS Community 2022 arm86 - release",
+      "displayName": "MSVS Community 2022 arm86 - release",
+      "generator": "Visual Studio 17 2022",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_COMPILER": "cl.exe",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "x64 Linux - release",
+      "displayName": "x64 Linux",
+      "generator": "Ninja",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "x86 Linux - release",
+      "displayName": "x86 Linux",
+      "generator": "Ninja",
+      "toolset": "host=x86",
+      "architecture": "x86",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "arm Linux - release",
+      "displayName": "arm Linux",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "arm64 Linux - release",
+      "displayName": "arm64 Linux",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "loongarch64 Linux - release",
+      "displayName": "loongarch64 Linux",
+      "generator": "Ninja",
+      "toolset": "host=loongarch64",
+      "architecture": "loongarch64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "loongarch32 Linux - release",
+      "displayName": "loongarch32 Linux",
+      "generator": "Ninja",
+      "toolset": "host=loongarch32",
+      "architecture": "loongarch32",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "ppcp64le Linux - release",
+      "displayName": "ppcp64le Linux",
+      "generator": "Ninja",
+      "toolset": "host=ppc64le",
+      "architecture": "ppc64le",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "riscv32 Linux - release",
+      "displayName": "riscv32 Linux",
+      "generator": "Ninja",
+      "toolset": "host=riscv32",
+      "architecture": "riscv32",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "riscv64 Linux - release",
+      "displayName": "riscv64 Linux",
+      "generator": "Ninja",
+      "toolset": "host=riscv64",
+      "architecture": "riscv64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "s390x Linux - release",
+      "displayName": "s390x Linux",
+      "generator": "Ninja",
+      "toolset": "host=s390x",
+      "architecture": "s390x",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "x64 FreeBSD - Release",
+      "displayName": "x64 FreeBSD",
+      "generator": "Ninja",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "x64 OpenBSD - release",
+      "displayName": "x64 OpenBSD",
+      "generator": "Ninja",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer"
+      }
+    },
+    {
+      "name": "Android arm - release",
+      "displayName": "Android arm",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "armeabi",
+        "ANDROID_PLATFORM": "android-16",
+        "VCPKG_TARGET_TRIPLET": "arm-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    },
+    {
+      "name": "Android arm64 - release",
+      "displayName": "Android arm64",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-24",
+        "VCPKG_TARGET_TRIPLET": "arm64-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    },
+    {
+      "name": "Android armv6 - release",
+      "displayName": "Android armv6",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "armeabi-v6",
+        "ANDROID_PLATFORM": "android-16",
+        "VCPKG_TARGET_TRIPLET": "arm-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    },
+    {
+      "name": "Android armv7a - release",
+      "displayName": "Android armv7a",
+      "generator": "Ninja",
+      "toolset": "host=arm",
+      "architecture": "arm",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "armeabi-v7a",
+        "ANDROID_PLATFORM": "android-24",
+        "VCPKG_TARGET_TRIPLET": "arm-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    },
+    {
+      "name": "Android x86 - release",
+      "displayName": "Android x86",
+      "generator": "Ninja",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "x86",
+        "ANDROID_PLATFORM": "android-16",
+        "VCPKG_TARGET_TRIPLET": "x86-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    },
+    {
+      "name": "Android x64 - release",
+      "displayName": "Android x64",
+      "generator": "Ninja",
+      "toolset": "host=x64",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ANDROID_ABI": "x86_64",
+        "ANDROID_PLATFORM": "android-24",
+        "VCPKG_TARGET_TRIPLET": "x64-android",
+        "CMAKE_SHARED_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl",
+        "CMAKE_EXE_LINKER_FLAGS": "-Wl,-z,max-page-size=4096 -Wl,-z,relro -Wl,-z,now -Wl,-z,nocopyreloc -Wl,--hash-style=both",
+        "CMAKE_C_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -funroll-loops -fomit-frame-pointer",
+        "VCPKG_CHAINLOAD_TOOLCHAIN_FILE": "$env{ANDROID_NDK_ROOT}/build/cmake/android.toolchain.cmake"
+      }
+    }
+  ]
+}
