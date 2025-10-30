@@ -39,7 +39,7 @@ char* Trim(const char* str)
   while (end > start && isspace(*end)) end--;
   size_t len = end - start + 1;
   char* result = (char*)malloc(len + 1);
-  strncpy_s(result, len + 1, start, len);
+  strncpy(result, start, len);
   result[len] = '\0';
   return result;
 }
