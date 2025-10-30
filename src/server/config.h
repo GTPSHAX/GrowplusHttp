@@ -1,5 +1,10 @@
 #pragma once
 
+// Server configuration
+#define APP_LISTEN_URL "http://0.0.0.0:8000" //!< URL to listen on
+#define APP_POLL_TIMEOUT_MS 5000                 //!< Poll timeout in milliseconds
+
+// Mongoose configuration
 #define MG_TLS MG_TLS_OPENSSL //!< Use openssl for lts
 #define MG_ENABLE_MD5 1 //!< Enable native MD5
 // #define MG_ENABLE_CUSTOM_CALLOC 1

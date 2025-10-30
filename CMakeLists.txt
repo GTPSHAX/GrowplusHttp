@@ -14,6 +14,7 @@ include_directories(
 
 add_executable(GrowplusHttp
   src/main.c
+  src/utils/Utils.c
   src/plugins/CacheManager.c
 
   externals/mongoose/mongoose.c
