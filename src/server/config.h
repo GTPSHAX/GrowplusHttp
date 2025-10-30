@@ -6,3 +6,7 @@
 #define MG_ENABLE_LINES 1 //!< Show file in logs
 #define MG_IO_SIZE 524288 //!< Granularity of the send/recv IO buffer growth
 #define MG_MAX_RECV_SIZE 16424 //!< Maximum recv buffer size
+
+// Plugin configurations
+#define CACHE_TTL_MS (5 * 60 * 1000) //!< Cache Time-To-Live in milliseconds (5 minutes)
+#define CACHE_MAX_SIZE_MB 50 //!< Maximum cache size in megabytes

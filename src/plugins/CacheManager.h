@@ -1,8 +1,16 @@
 #pragma once
+#include <server/config.h>
 
 #include <stdint.h>
 #include <stddef.h>
 #include <mongoose.h>
+
+#ifndef CACHE_TTL_MS
+#define CACHE_TTL_MS (5 * 60 * 1000)  //!< Default cache TTL: 5 minutes
+#endif
+#ifndef CACHE_MAX_SIZE_MB
+#define CACHE_MAX_SIZE_MB 50          //!< Default max cache size: 50 MB
+#endif
 
 //! Struct for cache entry
 struct CacheEntry {
@@ -61,4 +69,4 @@ struct CacheEntry* GH_CacheGetByPath(struct CacheBucket *cache, const char *file
 bool GH_CacheAdd(struct CacheBucket *cache, struct CacheEntry entry);
 
 // global
-extern struct CacheBucket *g_pCache; //!< Global cache bucket instance
+extern struct CacheBucket g_cache; //!< Global cache bucket instance
