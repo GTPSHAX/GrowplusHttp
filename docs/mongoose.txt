@@ -2322,3 +2322,186 @@ Usage example:
   char buf[100] = "";
   while (mg_fs_ls(&mg_fs_posix, "./", buf, sizeof(buf)))
     puts(buf);
+
+Multithreading#
+Overview#
+This tutorial will show you how to work with Mongoose on a multithreaded environment.
+
+As explicitly noted in the documentation, Mongoose is not thread-safe:
+
+Since Mongoose's core is not protected against concurrent accesses, make sure that all mg_* API functions are called from the same thread or RTOS task.
+
+To be able to use several threads, we need a mechanism that enables these threads to communicate with the main context in which the event manager is running. We can use a lock-free queue for that, though the event handler needs to poll for messages in that queue when it receives an MG_EV_POLL event. To have the event manager thread sleeping and wakeup when necessary, Mongoose provides a socket-based helper function.
+
+The 'one to one' case#
+Overview#
+When serving static pages or even in dynamic RESTful servers, it is common to return content on the same callback function that handles the request. However, when that request triggers an action that requires a long processing time, we might want to take advantage of a multithreaded environment and spawn a new thread for each request to take care of it.
+
+** GRAPH **
+
+The initialization sequence inits the wakeup scheme calling mg_wakeup_init()
+The client connects to our web server
+The usual event handler callback function receives the request, though this time, instead of handling it and sending a response, it will spawn a worker thread and pass the request to it
+The worker thread does its work and, when processing has finished, writes its response calling mg_wakeup(), frees its resources and exits
+This wakes up the event manager, and the web server event handler receives an MG_EV_WAKEUP event, carrying the response from the worker; then sends it to the client
+Build and run#
+This example starts a web server that spawns a thread to handle each request. That thread will sleep for a second, simulating a long process, and send a response back. If you POST to it, it will send the CRC of the posted data, otherwise it will just let you know that.
+
+Follow the Build Tools tutorial to setup your development environment.
+Start a terminal in the project directory; if you've not already done so, clone the Mongoose Library repo
+git clone https://github.com/cesanta/mongoose
+Build the example, this will also start Mongoose:
+cd mongoose/tutorials/core/multi-threaded
+make clean all
+Go to http://localhost:8000 in your browser; after two seconds, you'll see a response
+How it works#
+For each incoming request:
+
+The event handler function receives an MG_EV_HTTP_MSG event
+allocates memory for a structure
+duplicates the HTML message body containing the request
+spawns a new thread and hands over the request to it
+view code on github
+struct thread_data {
+  struct mg_mgr *mgr;
+  unsigned long conn_id;  // Parent connection ID
+  struct mg_str message;  // Original HTTP request
+};
+view code on github
+static void *thread_function(void *param) {
+  struct thread_data *p = (struct thread_data *) param;
+  sleep(2);                                 // Simulate long execution
+  mg_wakeup(p->mgr, p->conn_id, "hi!", 3);  // Respond to parent
+  mg_free((void *) p->message.buf);         // Free all resources that were
+  free(p);                                  // passed to us
+  return NULL;
+}
+The worker thread:
+simulates a long processing time (parsing and executing the request)
+writes a response using mg_wakeup()
+frees resources and exits
+view code on github
+static void *thread_function(void *param) {
+  struct thread_data *p = (struct thread_data *) param;
+  sleep(2);                                 // Simulate long execution
+  mg_wakeup(p->mgr, p->conn_id, "hi!", 3);  // Respond to parent
+  free((void *) p->message.buf);            // Free all resources that were
+  free(p);                                  // passed to us
+  return NULL;
+}
+The event handler function receives an MG_EV_WAKEUP event
+gets the response data and forwards it to the client
+view code on github
+  } else if (ev == MG_EV_WAKEUP) {
+    struct mg_str *data = (struct mg_str *) ev_data;
+    mg_http_reply(c, 200, "", "Result: %.*s\n", data->len, data->buf);
+  }
+On program startup, we initialize the event manager and the wakeup scheme, create the listener, and call the event manager in an infinite loop:
+
+view code on github
+int main(void) {
+  struct mg_mgr mgr;
+  mg_mgr_init(&mgr);        // Initialise event manager
+  mg_log_set(MG_LL_DEBUG);  // Set debug log level
+  mg_http_listen(&mgr, "http://localhost:8000", fn, NULL);  // Create listener
+  mg_wakeup_init(&mgr);  // Initialise wakeup socket pair
+  for (;;) {             // Event loop
+    mg_mgr_poll(&mgr, 1000);
+  }
+  mg_mgr_free(&mgr);
+  return 0;
+}
+Browse latest code
+
+The 'one to many' case#
+Overview#
+Embedded systems usually perform some measurement and or control task, and periodic reports of its status is commonly served to interested parties, usually over persistent WebSocket connections. For non-embedded applications, sometimes a single task distributes (streams) data (information, media) to multiple listeners. In these cases, there are no requests per se, but a task in continuous operation and a need to issue periodic updates. To simplify the development of such a task, we might want to take advantage of a multithreaded environment and spawn a thread to do that job, publishing to all existing connections.
+
+** GRAPH **
+
+The main difference with the former case, here, is that there is only one worker thread (or task thread), and it runs independently of the existence of any connections.
+
+The initialization sequence inits the wakeup scheme calling mg_wakeup_init()
+The event handler initialization sequence spawns a thread and passes manager and listener connection information to it.
+A client connects to our web server and its connection is upgraded to a WebSocket connection
+The task thread does its work and, when it is time for an update, writes the information by calling mg_wakeup()
+This wakes up the event manager, and the web server event handler receives an MG_EV_WAKEUP event, carrying data from the worker; it then scans all connections and sends that data to all registered clients.
+Build and run#
+This example starts a web server that spawns a thread to perform a continuous job. That thread will sleep for some time, simulating some process, and send data to all connected WebSocket clients.
+
+Follow the Build Tools tutorial to setup your development environment.
+
+Start a terminal in the project directory; if you've not already done so, clone the Mongoose Library repo
+
+git clone https://github.com/cesanta/mongoose
+Build the example, this will also start Mongoose:
+
+cd mongoose/tutorials/core/multi-threaded-12m
+make clean all
+With a WebSocket client (e.g.: wscat), go to ws://localhost:8000/websocket; every two seconds, you'll see a greeting:
+
+wscat --connect ws://localhost:8000/websocket
+Connected (press CTRL+C to quit)
+< hi!
+How it works#
+On program startup, we initialize the event manager and the wakeup scheme, create the listener, and call the event manager in an infinite loop, exactly as we did for the 'one to one' case:
+
+view code on github
+int main(void) {
+  struct mg_mgr mgr;
+  mg_mgr_init(&mgr);        // Initialise event manager
+  mg_log_set(MG_LL_DEBUG);  // Set debug log level
+  mg_http_listen(&mgr, "http://localhost:8000", fn, NULL);  // Create listener
+  mg_wakeup_init(&mgr);  // Initialise wakeup socket pair
+  for (;;) {             // Event loop
+    mg_mgr_poll(&mgr, 1000);
+  }
+  mg_mgr_free(&mgr);
+  return 0;
+}
+The event handler function is initialized when we start the listener, it receives an MG_EV_OPEN event. This also happens every time a new client connects and its connection is created, for that reason we check for the is_listening flag, that will only be set on the listener. Then, we create the running task on starup after Mongoose is ready, as we pass a pointers to the manager and a listener identifier to it:
+
+view code on github
+struct thread_data {
+  struct mg_mgr *mgr;
+  unsigned long conn_id;  // Parent connection ID
+};
+view code on github
+static void fn(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_OPEN && c->is_listening) {
+    // Start worker thread
+    struct thread_data *data = calloc(1, sizeof(*data));  // Worker owns it
+    data->conn_id = c->id;
+    data->mgr = c->mgr;
+    start_thread(thread_function, data);  // Start thread and pass data
+For each incoming request; the event handler function receives an MG_EV_HTTP_MSG event; if it requests the /websocket URI, we upgrade the connection and 'mark' it to identify it as a listener to whom we'll send data in due time.
+
+view code on github
+  } else if (ev == MG_EV_HTTP_MSG) {
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
+    if (mg_match(hm->uri, mg_str("/websocket"), NULL)) {
+      mg_ws_upgrade(c, hm, NULL);  // Upgrade HTTP to Websocket
+      c->data[0] = 'W';            // Set some unique mark on a connection
+The task thread is always running, it simulates some processing time and then writes data using mg_wakeup()
+
+view code on github
+static void *thread_function(void *param) {
+  struct thread_data *p = (struct thread_data *) param;
+  printf("THREAD STARTED\n");
+  for (;;) {
+    sleep(2);
+    mg_wakeup(p->mgr, p->conn_id, "hi!", 3);  // Send to parent
+  }
+When this happens, the event handler function receives an MG_EV_WAKEUP event; it then scans all connections searching for our 'mark' and replicates data to them
+
+view code on github
+  } else if (ev == MG_EV_WAKEUP) {
+    struct mg_str *data = (struct mg_str *) ev_data;
+    // Broadcast message to all connected websocket clients.
+    // Traverse over all connections
+    for (struct mg_connection *wc = c->mgr->conns; wc != NULL; wc = wc->next) {
+      // Send only to marked connections
+      if (wc->data[0] == 'W')
+        mg_ws_send(wc, data->buf, data->len, WEBSOCKET_OP_TEXT);
+    }
+Please note that only the listener connection receives this event, as the task thread has been passed its identifier and it sends it back to the manager when calling the wakeup function.
