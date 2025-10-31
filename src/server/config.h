@@ -4,7 +4,7 @@
 // Server configuration
 // ============================================================================
 #define APP_LISTEN_URL "http://0.0.0.0:8000"  //!< URL to listen on
-#define APP_POLL_TIMEOUT_MS 50                //!< Poll timeout in milliseconds (reduced for better responsiveness)
+#define APP_POLL_TIMEOUT_MS 60000                //!< Poll timeout in milliseconds (reduced for better responsiveness)
 
 // ============================================================================
 // Mongoose configuration - Optimized for high RPS

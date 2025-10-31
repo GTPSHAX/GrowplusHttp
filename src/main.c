@@ -103,7 +103,7 @@ static bool load_and_cache_file(struct mg_connection *c, const char *path,
 }
 
 // Connection event handler function with optimized static file serving
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+static void ev_handler2(struct mg_connection *c, int ev, void *ev_data) {
   if (ev == MG_EV_HTTP_MSG) {
     struct mg_http_message *hm = (struct mg_http_message *) ev_data;
 
@@ -173,6 +173,25 @@ static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
     if (now - last_cleanup > 60000) {  // Cleanup every minute
       GH_CacheEvictExpired(&g_cache, now);
       last_cleanup = now;
+    }
+  }
+}
+
+static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
+  if (ev == MG_EV_HTTP_MSG) {  // New HTTP request received
+    struct mg_http_message *hm = (struct mg_http_message *) ev_data;  // Parsed HTTP request
+    if (mg_match(hm->uri, mg_str("/api/hello"), NULL)) {              // REST API call?
+      mg_http_reply(c, 200, "", "{%m:%d}\n", MG_ESC("status"), 1);    // Yes. Respond JSON
+    } else {
+      struct mg_http_serve_opts opts = {
+        .root_dir = ".",
+        .ssi_pattern = NULL,
+        .extra_headers = NULL,
+        .mime_types = "application/octet-stream",
+        .page404 = NULL,
+        .fs = &mg_fs_posix
+      };
+      mg_http_serve_dir(c, hm, &opts);  // For all other URLs, Serve static files
     }
   }
 }
