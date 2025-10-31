@@ -1,3 +1,6 @@
 [submodule "externals/mongoose"]
 	path = externals/mongoose
 	url = https://github.com/GTPSHAX/mongoose
+[submodule "externals/h2o"]
+	path = externals/h2o
+	url = https://github.com/h2o/h2o

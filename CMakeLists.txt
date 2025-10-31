@@ -7,8 +7,13 @@ set(CMAKE_C_EXTENSIONS OFF)
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS}")
 
+add_subdirectory(externals/h2o)
+
 include_directories(
   src/
+  externals/h2o/include
+  externals/h2o/deps/picotls/include
+  externals/h2o/deps/quicly/include
   externals/mongoose
 )
 
@@ -29,7 +34,7 @@ target_precompile_headers(GrowplusHttp PRIVATE
   # )
 
 find_package(OpenSSL REQUIRED)
-target_link_libraries(GrowplusHttp PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+target_link_libraries(GrowplusHttp PRIVATE libh2o OpenSSL::SSL OpenSSL::Crypto)
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
   target_compile_options(GrowplusHttp PRIVATE

@@ -1,232 +1,288 @@
-#include "mongoose.h"
-#include "server/config.h"
-#include "plugins/CacheManager.h"
+/*
+ * Copyright (c) 2014 DeNA Co., Ltd.
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to
+ * deal in the Software without restriction, including without limitation the
+ * rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+ * sell copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+ * IN THE SOFTWARE.
+ */
+#include <errno.h>
+#include <limits.h>
+#include <netinet/in.h>
+#include <signal.h>
 #include <stdio.h>
-#include <string.h>
+#include <stdlib.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <h2o.h>
+#include <h2o/http1.h>
+#include <h2o/http2.h>
+#include <h2o/memcached.h>
 
-// Global cache instance
-struct CacheBucket g_cache = {0};
+#define USE_HTTPS 0
+#define USE_MEMCACHED 0
 
-// Generate ETag based on file path and modification time
-static void generate_etag(const char *path, time_t mtime, char *etag, size_t etag_len) {
-  mg_snprintf(etag, etag_len, "\"%lx-%lx\"", (unsigned long)mg_crc32(0, path, strlen(path)), 
-              (unsigned long)mtime);
+static h2o_pathconf_t *register_handler(h2o_hostconf_t *hostconf, const char *path, int (*on_req)(h2o_handler_t *, h2o_req_t *))
+{
+    h2o_pathconf_t *pathconf = h2o_config_register_path(hostconf, path, 0);
+    h2o_handler_t *handler = h2o_create_handler(pathconf, sizeof(*handler));
+    handler->on_req = on_req;
+    return pathconf;
 }
 
-// Serve file from cache with proper HTTP headers
-static void serve_from_cache(struct mg_connection *c, struct CacheEntry *entry, 
-                             struct mg_http_message *hm) {
-  // Check If-None-Match header for ETag validation
-  struct mg_str *if_none_match = mg_http_get_header(hm, "If-None-Match");
-  if (if_none_match != NULL && entry->etag != NULL) {
-    if (mg_strcmp(*if_none_match, mg_str(entry->etag)) == 0) {
-      // ETag matches, return 304 Not Modified
-      mg_printf(c, "HTTP/1.1 304 Not Modified\r\n"
-                   "ETag: %s\r\n"
-                   "Cache-Control: public, max-age=300\r\n"
-                   "Connection: keep-alive\r\n"
-                   "\r\n", entry->etag);
-      return;
-    }
-  }
+static int chunked_test(h2o_handler_t *self, h2o_req_t *req)
+{
+    static h2o_generator_t generator = {NULL, NULL};
 
-  // Determine content type based on file extension
-  const char *content_type = "application/octet-stream";
-  if (strstr(entry->path, ".html")) content_type = "text/html";
-  else if (strstr(entry->path, ".css")) content_type = "text/css";
-  else if (strstr(entry->path, ".js")) content_type = "application/javascript";
-  else if (strstr(entry->path, ".json")) content_type = "application/json";
-  else if (strstr(entry->path, ".png")) content_type = "image/png";
-  else if (strstr(entry->path, ".jpg") || strstr(entry->path, ".jpeg")) content_type = "image/jpeg";
-  else if (strstr(entry->path, ".gif")) content_type = "image/gif";
-  else if (strstr(entry->path, ".svg")) content_type = "image/svg+xml";
-  else if (strstr(entry->path, ".ico")) content_type = "image/x-icon";
-  else if (strstr(entry->path, ".woff")) content_type = "font/woff";
-  else if (strstr(entry->path, ".woff2")) content_type = "font/woff2";
-  else if (strstr(entry->path, ".ttf")) content_type = "font/ttf";
+    if (!h2o_memis(req->method.base, req->method.len, H2O_STRLIT("GET")))
+        return -1;
 
-  // Send response with caching headers
-  mg_printf(c, "HTTP/1.1 200 OK\r\n"
-               "Content-Type: %s\r\n"
-               "Content-Length: %lu\r\n"
-               "ETag: %s\r\n"
-               "Cache-Control: public, max-age=300\r\n"
-               "Connection: keep-alive\r\n"
-               "Accept-Ranges: bytes\r\n"
-               "\r\n",
-               content_type, (unsigned long)entry->data_len, 
-               entry->etag ? entry->etag : "");
-  
-  mg_send(c, entry->data, entry->data_len);
+    h2o_iovec_t body = h2o_strdup(&req->pool, "hello world\n", SIZE_MAX);
+    req->res.status = 200;
+    req->res.reason = "OK";
+    h2o_add_header(&req->pool, &req->res.headers, H2O_TOKEN_CONTENT_TYPE, NULL, H2O_STRLIT("text/plain"));
+    h2o_start_response(req, &generator);
+    h2o_send(req, &body, 1, 1);
+
+    return 0;
 }
 
-// Try to load file and add to cache
-static bool load_and_cache_file(struct mg_connection *c, const char *path, 
-                                struct mg_http_message *hm) {
-  // Read file from filesystem
-  struct mg_str file_data = mg_file_read(&mg_fs_posix, path);
-  if (file_data.buf == NULL) {
-    return false;
-  }
+static int reproxy_test(h2o_handler_t *self, h2o_req_t *req)
+{
+    if (!h2o_memis(req->method.base, req->method.len, H2O_STRLIT("GET")))
+        return -1;
 
-  // Get file metadata
-  size_t file_size = 0;
-  time_t mtime = 0;
-  mg_fs_posix.st(path, &file_size, &mtime);
+    req->res.status = 200;
+    req->res.reason = "OK";
+    h2o_add_header(&req->pool, &req->res.headers, H2O_TOKEN_X_REPROXY_URL, NULL, H2O_STRLIT("http://www.ietf.org/"));
+    h2o_send_inline(req, H2O_STRLIT("you should never see this!\n"));
 
-  // Generate ETag
-  char etag[64];
-  generate_etag(path, mtime, etag, sizeof(etag));
-
-  // Add to cache
-  if (GH_CacheAdd(&g_cache, path, file_data.buf, file_data.len, etag, mtime)) {
-    MG_INFO(("Cached file: %s (%lu bytes)", path, (unsigned long)file_data.len));
-    
-    // Serve from newly cached entry
-    struct CacheEntry *entry = GH_CacheGetByPath(&g_cache, path);
-    if (entry != NULL) {
-      serve_from_cache(c, entry, hm);
-    }
-  } else {
-    // Cache failed, serve directly
-    MG_ERROR(("Failed to cache file: %s", path));
-    struct mg_http_serve_opts opts = {
-      .root_dir = ".",
-      .fs = &mg_fs_posix,
-      .extra_headers = "Cache-Control: public, max-age=300\r\nConnection: keep-alive\r\n"
-    };
-    mg_http_serve_file(c, hm, path, &opts);
-  }
-
-  free((void *)file_data.buf);
-  return true;
+    return 0;
 }
 
-// Connection event handler function with optimized static file serving
-static void ev_handler2(struct mg_connection *c, int ev, void *ev_data) {
-  if (ev == MG_EV_HTTP_MSG) {
-    struct mg_http_message *hm = (struct mg_http_message *) ev_data;
-
-    // Handle API endpoints
-    if (mg_match(hm->uri, mg_str("/api/hello"), NULL)) {
-      mg_http_reply(c, 200, "Content-Type: application/json\r\nConnection: keep-alive\r\n", 
-                    "{%m:%d}\n", MG_ESC("status"), 1);
-      return;
+static int post_test(h2o_handler_t *self, h2o_req_t *req)
+{
+    if (h2o_memis(req->method.base, req->method.len, H2O_STRLIT("POST")) &&
+        h2o_memis(req->path_normalized.base, req->path_normalized.len, H2O_STRLIT("/post-test/"))) {
+        static h2o_generator_t generator = {NULL, NULL};
+        req->res.status = 200;
+        req->res.reason = "OK";
+        h2o_add_header(&req->pool, &req->res.headers, H2O_TOKEN_CONTENT_TYPE, NULL, H2O_STRLIT("text/plain; charset=utf-8"));
+        h2o_start_response(req, &generator);
+        h2o_send(req, &req->entity, 1, 1);
+        return 0;
     }
 
-    // Handle cache statistics endpoint
-    if (mg_match(hm->uri, mg_str("/api/cache/stats"), NULL)) {
-      mg_http_reply(c, 200, "Content-Type: application/json\r\nConnection: keep-alive\r\n",
-                    "{%m:%lu,%m:%lu,%m:%lu}\n",
-                    MG_ESC("entries"), (unsigned long)g_cache.entry_count,
-                    MG_ESC("size_bytes"), (unsigned long)g_cache.size,
-                    MG_ESC("size_mb"), (unsigned long)(g_cache.size / (1024 * 1024)));
-      return;
-    }
+    return -1;
+}
 
-    // Handle cache clear endpoint
-    if (mg_match(hm->uri, mg_str("/api/cache/clear"), NULL)) {
-      GH_CacheCleanup(&g_cache);
-      GH_CacheInit(&g_cache);
-      mg_http_reply(c, 200, "Content-Type: application/json\r\nConnection: keep-alive\r\n",
-                    "{%m:%m}\n", MG_ESC("status"), MG_ESC("cleared"));
-      return;
-    }
+static h2o_globalconf_t config;
+static h2o_context_t ctx;
+static h2o_multithread_receiver_t libmemcached_receiver;
+static h2o_accept_ctx_t accept_ctx;
 
-    // Build file path
-    char path[256];
-    mg_snprintf(path, sizeof(path), ".%.*s", (int)hm->uri.len, hm->uri.buf);
-    
-    // Default to index.html for root
-    if (strcmp(path, "./") == 0 || strcmp(path, ".") == 0) {
-      strcpy(path, "./index.html");
-    }
+#if H2O_USE_LIBUV
 
-    // Try to serve from cache first (cache-first strategy)
-    struct CacheEntry *cached = GH_CacheGetByPath(&g_cache, path);
-    if (cached != NULL) {
-      // Check if cache entry is still valid
-      uint64_t current_time = mg_millis();
-      if (current_time - cached->timestamp <= CACHE_TTL_MS) {
-        // Serve from cache
-        MG_DEBUG(("Serving from cache: %s", path));
-        serve_from_cache(c, cached, hm);
+static void on_accept(uv_stream_t *listener, int status)
+{
+    uv_tcp_t *conn;
+    h2o_socket_t *sock;
+
+    if (status != 0)
         return;
-      } else {
-        // Cache expired, remove entry
-        MG_DEBUG(("Cache expired: %s", path));
-        GH_CacheRemove(&g_cache, path);
-      }
+
+    conn = h2o_mem_alloc(sizeof(*conn));
+    uv_tcp_init(listener->loop, conn);
+
+    if (uv_accept(listener, (uv_stream_t *)conn) != 0) {
+        uv_close((uv_handle_t *)conn, (uv_close_cb)free);
+        return;
     }
 
-    // Not in cache or expired, load from disk
-    MG_DEBUG(("Loading from disk: %s", path));
-    if (!load_and_cache_file(c, path, hm)) {
-      // File not found, serve 404
-      mg_http_reply(c, 404, "Connection: keep-alive\r\n", "File not found\n");
-    }
-
-  } else if (ev == MG_EV_POLL) {
-    // Periodically evict expired cache entries (every poll)
-    static uint64_t last_cleanup = 0;
-    uint64_t now = mg_millis();
-    if (now - last_cleanup > 60000) {  // Cleanup every minute
-      GH_CacheEvictExpired(&g_cache, now);
-      last_cleanup = now;
-    }
-  }
+    sock = h2o_uv_socket_create((uv_handle_t *)conn, (uv_close_cb)free);
+    h2o_accept(&accept_ctx, sock);
 }
 
-static void ev_handler(struct mg_connection *c, int ev, void *ev_data) {
-  if (ev == MG_EV_HTTP_MSG) {  // New HTTP request received
-    struct mg_http_message *hm = (struct mg_http_message *) ev_data;  // Parsed HTTP request
-    if (mg_match(hm->uri, mg_str("/api/hello"), NULL)) {              // REST API call?
-      mg_http_reply(c, 200, "", "{%m:%d}\n", MG_ESC("status"), 1);    // Yes. Respond JSON
-    } else {
-      struct mg_http_serve_opts opts = {
-        .root_dir = ".",
-        .ssi_pattern = NULL,
-        .extra_headers = NULL,
-        .mime_types = "application/octet-stream",
-        .page404 = NULL,
-        .fs = &mg_fs_posix
-      };
-      mg_http_serve_dir(c, hm, &opts);  // For all other URLs, Serve static files
+static int create_listener(void)
+{
+    static uv_tcp_t listener;
+    struct sockaddr_in addr;
+    int r;
+
+    uv_tcp_init(ctx.loop, &listener);
+    uv_ip4_addr("0.0.0.0", 8000, &addr);
+    if ((r = uv_tcp_bind(&listener, (struct sockaddr *)&addr, 0)) != 0) {
+        fprintf(stderr, "uv_tcp_bind:%s\n", uv_strerror(r));
+        goto Error;
     }
-  }
+    if ((r = uv_listen((uv_stream_t *)&listener, 128, on_accept)) != 0) {
+        fprintf(stderr, "uv_listen:%s\n", uv_strerror(r));
+        goto Error;
+    }
+
+    return 0;
+Error:
+    uv_close((uv_handle_t *)&listener, NULL);
+    return r;
 }
 
-int main(void) {
-  struct mg_mgr mgr;
-  
-  // Initialize logging
-  mg_log_set(MG_LL_INFO);
-  
-  // Initialize cache
-  GH_CacheInit(&g_cache);
-  MG_INFO(("Cache initialized: TTL=%dms, MaxSize=%dMB", CACHE_TTL_MS, CACHE_MAX_SIZE_MB));
+#else
 
-  // Initialize event manager
-  mg_mgr_init(&mgr);
-  
-  // Create HTTP listener with optimized settings
-  struct mg_connection *listener = mg_http_listen(&mgr, APP_LISTEN_URL, ev_handler, NULL);
-  if (listener == NULL) {
-    MG_ERROR(("Failed to create listener on %s", APP_LISTEN_URL));
+static void on_accept(h2o_socket_t *listener, const char *err)
+{
+    h2o_socket_t *sock;
+
+    if (err != NULL) {
+        return;
+    }
+
+    if ((sock = h2o_evloop_socket_accept(listener)) == NULL)
+        return;
+    h2o_accept(&accept_ctx, sock);
+}
+
+static int create_listener(void)
+{
+    struct sockaddr_in addr;
+    int fd, reuseaddr_flag = 1;
+    h2o_socket_t *sock;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(0x7f000001);
+    addr.sin_port = htons(7890);
+
+    if ((fd = socket(AF_INET, SOCK_STREAM, 0)) == -1 ||
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &reuseaddr_flag, sizeof(reuseaddr_flag)) != 0 ||
+        bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 || listen(fd, SOMAXCONN) != 0) {
+        return -1;
+    }
+
+    sock = h2o_evloop_socket_create(ctx.loop, fd, H2O_SOCKET_FLAG_DONT_READ);
+    h2o_socket_read_start(sock, on_accept);
+
+    return 0;
+}
+
+#endif
+
+static int setup_ssl(const char *cert_file, const char *key_file, const char *ciphers)
+{
+    SSL_load_error_strings();
+    SSL_library_init();
+    OpenSSL_add_all_algorithms();
+
+    accept_ctx.ssl_ctx = SSL_CTX_new(SSLv23_server_method());
+    SSL_CTX_set_options(accept_ctx.ssl_ctx, SSL_OP_NO_SSLv2);
+
+    if (USE_MEMCACHED) {
+        accept_ctx.libmemcached_receiver = &libmemcached_receiver;
+        h2o_accept_setup_memcached_ssl_resumption(h2o_memcached_create_context("127.0.0.1", 11211, 0, 1, "h2o:ssl-resumption:"),
+                                                  86400);
+        h2o_socket_ssl_async_resumption_setup_ctx(accept_ctx.ssl_ctx);
+    }
+
+#ifdef SSL_CTX_set_ecdh_auto
+    SSL_CTX_set_ecdh_auto(accept_ctx.ssl_ctx, 1);
+#endif
+
+    /* load certificate and private key */
+    if (SSL_CTX_use_certificate_chain_file(accept_ctx.ssl_ctx, cert_file) != 1) {
+        fprintf(stderr, "an error occurred while trying to load server certificate file:%s\n", cert_file);
+        return -1;
+    }
+    if (SSL_CTX_use_PrivateKey_file(accept_ctx.ssl_ctx, key_file, SSL_FILETYPE_PEM) != 1) {
+        fprintf(stderr, "an error occurred while trying to load private key file:%s\n", key_file);
+        return -1;
+    }
+
+    if (SSL_CTX_set_cipher_list(accept_ctx.ssl_ctx, ciphers) != 1) {
+        fprintf(stderr, "ciphers could not be set: %s\n", ciphers);
+        return -1;
+    }
+
+/* setup protocol negotiation methods */
+#if H2O_USE_NPN
+    h2o_ssl_register_npn_protocols(accept_ctx.ssl_ctx, h2o_http2_npn_protocols);
+#endif
+#if H2O_USE_ALPN
+    h2o_ssl_register_alpn_protocols(accept_ctx.ssl_ctx, h2o_http2_alpn_protocols);
+#endif
+
+    return 0;
+}
+
+int main(int argc, char **argv)
+{
+    h2o_hostconf_t *hostconf;
+    h2o_access_log_filehandle_t *logfh = h2o_access_log_open_handle("/dev/stdout", NULL, H2O_LOGCONF_ESCAPE_APACHE);
+    h2o_pathconf_t *pathconf;
+
+    signal(SIGPIPE, SIG_IGN);
+
+    h2o_config_init(&config);
+    hostconf = h2o_config_register_host(&config, h2o_iovec_init(H2O_STRLIT("default")), 65535);
+
+    pathconf = register_handler(hostconf, "/post-test", post_test);
+    if (logfh != NULL)
+        h2o_access_log_register(pathconf, logfh);
+
+    pathconf = register_handler(hostconf, "/chunked-test", chunked_test);
+    if (logfh != NULL)
+        h2o_access_log_register(pathconf, logfh);
+
+    pathconf = register_handler(hostconf, "/reproxy-test", reproxy_test);
+    h2o_reproxy_register(pathconf);
+    if (logfh != NULL)
+        h2o_access_log_register(pathconf, logfh);
+
+    pathconf = h2o_config_register_path(hostconf, "/", 0);
+    h2o_file_register(pathconf, "examples/doc_root", NULL, NULL, 0);
+    if (logfh != NULL)
+        h2o_access_log_register(pathconf, logfh);
+
+#if H2O_USE_LIBUV
+    uv_loop_t loop;
+    uv_loop_init(&loop);
+    h2o_context_init(&ctx, &loop, &config);
+#else
+    h2o_context_init(&ctx, h2o_evloop_create(), &config);
+#endif
+    if (USE_MEMCACHED)
+        h2o_multithread_register_receiver(ctx.queue, &libmemcached_receiver, h2o_memcached_receiver);
+
+    if (USE_HTTPS && setup_ssl("examples/h2o/server.crt", "examples/h2o/server.key",
+                               "DEFAULT:!MD5:!DSS:!DES:!RC4:!RC2:!SEED:!IDEA:!NULL:!ADH:!EXP:!SRP:!PSK") != 0)
+        goto Error;
+
+    accept_ctx.ctx = &ctx;
+    accept_ctx.hosts = config.hosts;
+
+    if (create_listener() != 0) {
+        fprintf(stderr, "failed to listen to 127.0.0.1:7890:%s\n", strerror(errno));
+        goto Error;
+    }
+
+#if H2O_USE_LIBUV
+    uv_run(ctx.loop, UV_RUN_DEFAULT);
+#else
+    while (h2o_evloop_run(ctx.loop, INT32_MAX) == 0)
+        ;
+#endif
+
+Error:
     return 1;
-  }
-  
-  MG_INFO(("HTTP server started on %s", APP_LISTEN_URL));
-  MG_INFO(("Optimizations enabled: keep-alive, ETags, caching, compression hints"));
-
-  // Event loop with optimized poll timeout
-  for (;;) {
-    mg_mgr_poll(&mgr, APP_POLL_TIMEOUT_MS);
-  }
-
-  // Cleanup (unreachable in this implementation)
-  GH_CacheCleanup(&g_cache);
-  mg_mgr_free(&mgr);
-  
-  return 0;
 }
